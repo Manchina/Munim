@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1795765863840,
+      "tag": "0000_dazzling_kate_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795766590762,
+      "tag": "0001_append_only_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795773178262,
+      "tag": "0002_supabase_api_isolation",
+      "breakpoints": true
+    }
+  ]
+}
