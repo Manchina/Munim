@@ -97,6 +97,40 @@ describe('store transactions and access', () => {
     });
     expect(forbidden.statusCode).toBe(403);
   });
+  it('accepts the alternate local development origin but rejects other origins', async () => {
+    const alternate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      headers: { origin: 'http://127.0.0.1:5173' },
+      payload: { email: 'owner@test.local', password },
+    });
+    expect(alternate.statusCode, alternate.body).toBe(200);
+    for (const origin of ['http://localhost:5174', 'http://localhost.evil.example:5173', 'null']) {
+      const denied = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        headers: { origin },
+        payload: { email: 'owner@test.local', password },
+      });
+      expect(denied.statusCode).toBe(403);
+    }
+    const production = await createApp(db, {
+      origin,
+      quoteSecret: 'test-secret-with-at-least-32-characters',
+      production: true,
+    });
+    try {
+      const denied = await production.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        headers: { origin: 'http://127.0.0.1:5173' },
+        payload: { email: 'owner@test.local', password },
+      });
+      expect(denied.statusCode).toBe(403);
+    } finally {
+      await production.close();
+    }
+  });
   it('seeds itemized balances and twelve products', async () => {
     const products = (await request('GET', path('/products'))).json<{ items: Product[] }>();
     expect(products.items).toHaveLength(12);
