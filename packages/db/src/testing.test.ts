@@ -1,33 +1,43 @@
 import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { and, count, eq, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { expect, it } from 'vitest';
 import { migrateTestDatabase } from './testing';
+import { pgClass, pgConstraint } from './testing-catalog';
 
 it('keeps migration tables and foreign keys inside the isolated test schema', async () => {
   const pg = new PGlite();
+  const db = drizzle(pg);
   const schema = 'munim_test_00000000000000000000000000000001';
   try {
-    await pg.exec(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
-    await migrateTestDatabase((sql) => pg.exec(sql), schema);
-    const tables = await pg.query<{ count: number }>(
-      "SELECT count(*)::int AS count FROM pg_class WHERE relnamespace=current_schema()::regnamespace AND relkind='r'",
-    );
-    expect(tables.rows[0]?.count).toBe(18);
-    const foreignKeys = await pg.query<{ schema: string; referenced_schema: string }>(
-      `SELECT source.relnamespace::regnamespace::text AS schema,
-              target.relnamespace::regnamespace::text AS referenced_schema
-       FROM pg_constraint constraint_record
-       JOIN pg_class source ON source.oid=constraint_record.conrelid
-       JOIN pg_class target ON target.oid=constraint_record.confrelid
-       WHERE constraint_record.contype='f' AND source.relnamespace=current_schema()::regnamespace`,
-    );
-    expect(foreignKeys.rows.length).toBeGreaterThan(0);
-    expect(
-      foreignKeys.rows.every((key) => key.schema === schema && key.referenced_schema === schema),
-    ).toBe(true);
-    const publicTables = await pg.query<{ count: number }>(
-      "SELECT count(*)::int AS count FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r'",
-    );
-    expect(publicTables.rows[0]?.count).toBe(0);
+    await db.execute(sql`CREATE SCHEMA ${sql.identifier(schema)}`);
+    await db.execute(sql`SET search_path TO ${sql.identifier(schema)}`);
+    await migrateTestDatabase((statement) => pg.exec(statement), schema);
+    const [tables] = await db
+      .select({ count: count() })
+      .from(pgClass)
+      .where(
+        and(eq(pgClass.namespace, sql`current_schema()::regnamespace`), eq(pgClass.kind, 'r')),
+      );
+    expect(tables?.count).toBe(18);
+    const source = alias(pgClass, 'source_relation'),
+      target = alias(pgClass, 'target_relation');
+    const foreignKeys = await db
+      .select({ namespace: source.namespace, referencedNamespace: target.namespace })
+      .from(pgConstraint)
+      .innerJoin(source, eq(source.oid, pgConstraint.relationId))
+      .innerJoin(target, eq(target.oid, pgConstraint.referencedRelationId))
+      .where(
+        and(eq(pgConstraint.kind, 'f'), eq(source.namespace, sql`current_schema()::regnamespace`)),
+      );
+    expect(foreignKeys.length).toBeGreaterThan(0);
+    expect(foreignKeys.every((key) => key.namespace === key.referencedNamespace)).toBe(true);
+    const [publicTables] = await db
+      .select({ count: count() })
+      .from(pgClass)
+      .where(and(eq(pgClass.namespace, sql`'public'::regnamespace`), eq(pgClass.kind, 'r')));
+    expect(publicTables?.count).toBe(0);
   } finally {
     await pg.close();
   }

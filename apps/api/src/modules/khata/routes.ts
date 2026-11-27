@@ -1,17 +1,37 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, desc, eq, gt, isNull, lt, or } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { type StoreRoute, param, key, empty } from '../../lib/router';
-import { pageInput, paymentInput, type LedgerEntry } from '@munim/contracts';
+import { pageInput, paymentInput } from '@munim/contracts';
 import { customer, page } from '../catalog/repository';
-import { customerBalance } from '../sales/service';
+import { balanceExpression, customerBalance } from '../sales/service';
 import { one, rows, fail, idempotent } from '../../lib/core';
+const { customers, khataEntries } = schema;
 export function registerKhataRoutes(route: StoreRoute, db: Database) {
   route('GET', '/khata', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
     return page(
-      await rows<{ id: string; name: string; balancePaise: number }>(
-        db,
-        "SELECT c.id,c.name,COALESCE(SUM(CASE WHEN k.kind='sale_debit' THEN k.amount_paise ELSE -k.amount_paise END),0)::bigint AS balance_paise FROM customers c LEFT JOIN khata_entries k ON k.store_id=c.store_id AND k.customer_id=c.id WHERE c.store_id=$1 AND c.archived_at IS NULL AND ($2::uuid IS NULL OR c.id>$2) GROUP BY c.id ORDER BY c.id LIMIT $3",
-        [c.storeId, p.cursor ?? null, p.limit + 1],
+      await rows(
+        db
+          .select({ id: customers.id, name: customers.name, balancePaise: balanceExpression() })
+          .from(customers)
+          .leftJoin(
+            khataEntries,
+            and(
+              eq(khataEntries.storeId, customers.storeId),
+              eq(khataEntries.customerId, customers.id),
+            ),
+          )
+          .where(
+            and(
+              eq(customers.storeId, c.storeId),
+              isNull(customers.archivedAt),
+              p.cursor ? gt(customers.id, p.cursor) : undefined,
+            ),
+          )
+          .groupBy(customers.id)
+          .orderBy(customers.id)
+          .limit(p.limit + 1),
       ),
       p.limit,
     );
@@ -20,10 +40,37 @@ export function registerKhataRoutes(route: StoreRoute, db: Database) {
     const customerId = param(req, 'customerId');
     await customer(db, c.storeId, customerId);
     const p = pageInput.parse(req.query);
-    const entries = await rows<LedgerEntry>(
-      db,
-      'SELECT * FROM khata_entries WHERE store_id=$1 AND customer_id=$2 AND ($3::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM khata_entries WHERE store_id=$1 AND customer_id=$2 AND id=$3)) ORDER BY created_at DESC,id DESC LIMIT $4',
-      [c.storeId, customerId, p.cursor ?? null, p.limit + 1],
+    const cursor = alias(khataEntries, 'cursor_entry');
+    const cursorTime = p.cursor
+      ? db
+          .select({ createdAt: cursor.createdAt })
+          .from(cursor)
+          .where(
+            and(
+              eq(cursor.storeId, c.storeId),
+              eq(cursor.customerId, customerId),
+              eq(cursor.id, p.cursor),
+            ),
+          )
+      : undefined;
+    const entries = await rows(
+      db
+        .select()
+        .from(khataEntries)
+        .where(
+          and(
+            eq(khataEntries.storeId, c.storeId),
+            eq(khataEntries.customerId, customerId),
+            p.cursor && cursorTime
+              ? or(
+                  lt(khataEntries.createdAt, cursorTime),
+                  and(eq(khataEntries.createdAt, cursorTime), lt(khataEntries.id, p.cursor)),
+                )
+              : undefined,
+          ),
+        )
+        .orderBy(desc(khataEntries.createdAt), desc(khataEntries.id))
+        .limit(p.limit + 1),
     );
     return {
       balancePaise: await customerBalance(db, c.storeId, customerId),
@@ -36,10 +83,19 @@ export function registerKhataRoutes(route: StoreRoute, db: Database) {
       await customer(tx, c.storeId, customerId, true);
       const balance = await customerBalance(tx, c.storeId, customerId);
       if (v.amountPaise > balance) fail(422, 'OVERPAYMENT', 'Payment exceeds the pending balance.');
-      const entry = await one<LedgerEntry>(
-        tx,
-        "INSERT INTO khata_entries(store_id,customer_id,kind,amount_paise,method,reference,actor_id) VALUES($1,$2,'payment',$3,$4,$5,$6) RETURNING *",
-        [c.storeId, customerId, v.amountPaise, v.method, v.reference, c.userId],
+      const entry = await one(
+        tx
+          .insert(khataEntries)
+          .values({
+            storeId: c.storeId,
+            customerId,
+            kind: 'payment',
+            amountPaise: v.amountPaise,
+            method: v.method,
+            reference: v.reference,
+            actorId: c.userId,
+          })
+          .returning(),
       );
       return { entry, balancePaise: balance - v.amountPaise };
     });

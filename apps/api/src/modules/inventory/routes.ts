@@ -1,17 +1,28 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import { type StoreRoute, key, empty } from '../../lib/router';
-import { receiptInput, adjustmentInput, pageInput, type Product } from '@munim/contracts';
-import { productSelect, page, moveStock } from '../catalog/repository';
-import { rows, idempotent } from '../../lib/core';
+import { receiptInput, adjustmentInput, pageInput } from '@munim/contracts';
+import { productSelect, productsWithAliases, page, moveStock } from '../catalog/repository';
+import { idempotent } from '../../lib/core';
 export function registerInventoryRoutes(route: StoreRoute, db: Database) {
   route('GET', '/inventory', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
+    const { products } = schema;
+    const items = await productsWithAliases(
+      db,
+      productSelect(db)
+        .where(
+          and(
+            eq(products.storeId, c.storeId),
+            isNull(products.archivedAt),
+            p.cursor ? gt(products.id, p.cursor) : undefined,
+          ),
+        )
+        .orderBy(products.id)
+        .limit(p.limit + 1),
+    );
     return page(
-      await rows<Product & { lowStock: boolean }>(
-        db,
-        `${productSelect.replace('SELECT p.*,', 'SELECT p.*, b.quantity<=p.safety_stock AS low_stock,')} WHERE p.store_id=$1 AND p.archived_at IS NULL AND ($2::uuid IS NULL OR p.id>$2) ORDER BY p.id LIMIT $3`,
-        [c.storeId, p.cursor ?? null, p.limit + 1],
-      ),
+      items.map((item) => ({ ...item, lowStock: item.quantity <= item.safetyStock })),
       p.limit,
     );
   });

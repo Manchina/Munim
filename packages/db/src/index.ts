@@ -1,37 +1,27 @@
-import pg from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { createPool } from './config';
+import * as schema from './schema/index';
 export { createPool, resolveDatabaseUrl } from './config';
-export * as schema from './schema/index';
-export interface Connection {
-  query<T extends object>(sql: string, values?: unknown[]): Promise<T[]>;
-}
+export { schema };
+export type Connection = Pick<
+  PgDatabase<PgQueryResultHKT, typeof schema>,
+  'select' | 'insert' | 'update' | 'delete' | 'execute'
+>;
 export interface Database extends Connection {
   transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 export function connect(url: string): Database {
   const pool = createPool(url);
-  const wrap = (client: pg.Pool | pg.PoolClient): Connection => ({
-    async query<T extends object>(sql: string, values?: unknown[]) {
-      return ((await client.query(sql, values)).rows as T[]) ?? [];
-    },
-  });
+  const orm = drizzle(pool, { schema });
   return {
-    ...wrap(pool),
-    async transaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        const value = await fn(wrap(client));
-        await client.query('COMMIT');
-        return value;
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      } finally {
-        client.release();
-      }
-    },
+    select: orm.select.bind(orm),
+    insert: orm.insert.bind(orm),
+    update: orm.update.bind(orm),
+    delete: orm.delete.bind(orm),
+    execute: orm.execute.bind(orm),
+    transaction: (fn) => orm.transaction(fn),
     close: () => pool.end(),
   };
 }

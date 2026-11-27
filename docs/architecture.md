@@ -37,7 +37,7 @@ packages/
 tests/e2e/                  # Isolated API and browser journeys
 ```
 
-Routes validate inputs using shared Zod schemas and orchestrate domain operations. The checkout service owns quote verification and transaction order. Shared repository helpers normalize database rows, scope lookups and lock products/customers. SQL values are parameterized. Drizzle defines schemas/migrations; runtime SQL uses the typed node-postgres `Connection` abstraction, allowing the same queries to be exercised with PGlite and PostgreSQL.
+Routes validate inputs using shared Zod schemas and orchestrate domain operations. The checkout service owns quote verification and transaction order. Drizzle query builders handle runtime reads, writes, joins, pagination, row locks, and transactions against the shared schema. The production client uses Drizzle's node-postgres adapter; embedded tests use its PGlite adapter. Repository helpers serialize dates, check bounded money values, and scope lookups by store. Parameterized Drizzle SQL expressions cover PostgreSQL advisory locks, arithmetic, and exact ledger aggregates. SQL migration files and test-only DDL retain database constraints, audit triggers, role grants, and isolated schema setup.
 
 ## Schema
 

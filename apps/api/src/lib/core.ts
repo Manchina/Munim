@@ -1,5 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Connection, Database } from '@munim/db';
+import { schema } from '@munim/db';
+import { and, eq, sql } from 'drizzle-orm';
 export class AppError extends Error {
   constructor(
     public status: number,
@@ -23,36 +25,28 @@ export function canonical(value: unknown): string {
       .join(',')}}`;
   return JSON.stringify(value);
 }
-// pg returns int8 as strings. Convert only known bounded money fields at the repository boundary.
-function mapRow(row: object): object {
+type SerializedValue<T> = T extends Date ? string : T;
+type Serialized<T> = { [K in keyof T]: SerializedValue<T[K]> };
+function mapRow<T extends object>(row: T): Serialized<T> {
   return Object.fromEntries(
     Object.entries(row).map(([key, value]) => {
-      const name = key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
       const result =
         value instanceof Date
           ? value.toISOString()
-          : key.endsWith('_paise') && typeof value === 'string'
+          : key.endsWith('Paise') && typeof value === 'string'
             ? Number(value)
             : value;
-      if (key.endsWith('_paise') && !Number.isSafeInteger(result))
+      if (key.endsWith('Paise') && !Number.isSafeInteger(result))
         fail(422, 'AMOUNT_LIMIT', 'Amount exceeds the supported limit.');
-      return [name, result];
+      return [key, result];
     }),
-  );
+  ) as Serialized<T>;
 }
-export async function rows<T extends object>(
-  db: Connection,
-  sql: string,
-  params: unknown[] = [],
-): Promise<T[]> {
-  return (await db.query(sql, params)).map((r) => mapRow(r) as T);
+export async function rows<T extends object>(query: PromiseLike<T[]>): Promise<Serialized<T>[]> {
+  return (await query).map(mapRow);
 }
-export async function one<T extends object>(
-  db: Connection,
-  sql: string,
-  params: unknown[] = [],
-): Promise<T> {
-  const found = await rows<T>(db, sql, params);
+export async function one<T extends object>(query: PromiseLike<T[]>): Promise<Serialized<T>> {
+  const found = await rows(query);
   return found[0] ?? fail(404, 'NOT_FOUND', 'Resource was not found.');
 }
 export async function idempotent<T>(
@@ -71,24 +65,28 @@ export async function idempotent<T>(
     );
   const requestHash = hash(canonical(input));
   return db.transaction(async (tx) => {
-    await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      `${storeId}:${operation}:${key}`,
-    ]);
-    const [prior] = await rows<{ requestHash: string; response: T }>(
-      tx,
-      'SELECT request_hash,response FROM idempotency_records WHERE store_id=$1 AND operation=$2 AND key=$3',
-      [storeId, operation, key],
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`${storeId}:${operation}:${key}`}, 0))`,
     );
+    const [prior] = await tx
+      .select()
+      .from(schema.idempotencyRecords)
+      .where(
+        and(
+          eq(schema.idempotencyRecords.storeId, storeId),
+          eq(schema.idempotencyRecords.operation, operation),
+          eq(schema.idempotencyRecords.key, key!),
+        ),
+      );
     if (prior) {
       if (prior.requestHash !== requestHash)
         fail(409, 'IDEMPOTENCY_CONFLICT', 'This key was used with a different request.');
-      return prior.response;
+      return prior.response as T;
     }
     const result = await fn(tx);
-    await tx.query(
-      'INSERT INTO idempotency_records(store_id,operation,key,request_hash,response) VALUES($1,$2,$3,$4,$5::jsonb)',
-      [storeId, operation, key, requestHash, JSON.stringify(result)],
-    );
+    await tx
+      .insert(schema.idempotencyRecords)
+      .values({ storeId, operation, key: key!, requestHash, response: result });
     return result;
   });
 }

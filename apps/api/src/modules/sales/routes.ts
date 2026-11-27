@@ -1,9 +1,12 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { type StoreRoute, param, key, empty } from '../../lib/router';
-import { cartInput, checkoutInput, pageInput, type Sale } from '@munim/contracts';
+import { cartInput, checkoutInput, pageInput } from '@munim/contracts';
 import { page } from '../catalog/repository';
 import { preview, checkout, saleDetail } from './service';
 import { rows } from '../../lib/core';
+const { sales } = schema;
 export function registerSalesRoutes(route: StoreRoute, db: Database, secret: string) {
   route('POST', '/sales/preview', cartInput, async (v, c) =>
     preview(db, c.storeId, c.userId, v, secret),
@@ -13,11 +16,31 @@ export function registerSalesRoutes(route: StoreRoute, db: Database, secret: str
   );
   route('GET', '/sales', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
+    const cursor = alias(sales, 'cursor_sale');
+    const cursorTime = p.cursor
+      ? db
+          .select({ createdAt: cursor.createdAt })
+          .from(cursor)
+          .where(and(eq(cursor.storeId, c.storeId), eq(cursor.id, p.cursor)))
+      : undefined;
     return page(
-      await rows<Sale>(
-        db,
-        'SELECT * FROM sales WHERE store_id=$1 AND ($2::uuid IS NULL OR (created_at,id)<(SELECT created_at,id FROM sales WHERE store_id=$1 AND id=$2)) ORDER BY created_at DESC,id DESC LIMIT $3',
-        [c.storeId, p.cursor ?? null, p.limit + 1],
+      await rows(
+        db
+          .select()
+          .from(sales)
+          .where(
+            and(
+              eq(sales.storeId, c.storeId),
+              p.cursor && cursorTime
+                ? or(
+                    lt(sales.createdAt, cursorTime),
+                    and(eq(sales.createdAt, cursorTime), lt(sales.id, p.cursor)),
+                  )
+                : undefined,
+            ),
+          )
+          .orderBy(desc(sales.createdAt), desc(sales.id))
+          .limit(p.limit + 1),
       ),
       p.limit,
     );

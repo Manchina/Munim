@@ -3,7 +3,8 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { ZodError } from 'zod';
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { DrizzleQueryError } from 'drizzle-orm';
 import { AppError, fail } from './lib/core';
 import { registerAuth } from './modules/auth/routes';
 import { registerStoreRoutes } from './modules/routes';
@@ -47,7 +48,8 @@ export async function createApp(db: Database, config: Config) {
       return reply
         .code(error.status)
         .send({ error: { code: error.code, message: error.message }, requestId: req.id });
-    const e = error as { code?: string; statusCode?: number };
+    const cause = error instanceof DrizzleQueryError ? error.cause : error;
+    const e = (cause ?? error) as { code?: string; statusCode?: number };
     if (e.code === '23505')
       return reply.code(409).send({
         error: { code: 'ALREADY_EXISTS', message: 'This record already exists.' },
@@ -83,7 +85,7 @@ export async function createApp(db: Database, config: Config) {
   await registerAuth(app, db, config.production ?? false);
   app.get('/health/live', async () => ({ ok: true }));
   app.get('/health/ready', async () => {
-    await db.query('SELECT 1');
+    await db.select({ id: schema.users.id }).from(schema.users).limit(1);
     return { ok: true };
   });
   registerStoreRoutes(app, db, config.quoteSecret, config.origin);

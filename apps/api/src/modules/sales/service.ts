@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { and, eq, sql, getTableColumns } from 'drizzle-orm';
+import { schema, type Connection, type Database } from '@munim/db';
 import {
   cartInput,
   lineTotal,
@@ -9,9 +11,9 @@ import {
   type Preview,
   type Settings,
 } from '@munim/contracts';
-import type { Connection, Database } from '@munim/db';
 import { customer, product, settings } from '../catalog/repository';
 import { canonical, fail, hash, idempotent, one, rows, sign, verify } from '../../lib/core';
+const { sales, saleItems, inventoryBalances, stockMovements, khataEntries } = schema;
 const quoteSchema = z.object({
   storeId: z.string().uuid(),
   userId: z.string().uuid(),
@@ -106,66 +108,84 @@ export async function checkout(
       const balance = await customerBalance(tx, storeId, q.cart.customerId!);
       boundedMoney(() => sumMoney([balance, value.totalPaise]));
     }
-    const sale = await one<Sale>(
-      tx,
-      'INSERT INTO sales(store_id,customer_id,payment_method,total_paise,actor_id) VALUES($1,$2,$3,$4,$5) RETURNING *',
-      [storeId, q.cart.customerId, q.cart.paymentMethod, value.totalPaise, userId],
+    const sale = await one(
+      tx
+        .insert(sales)
+        .values({
+          storeId,
+          customerId: q.cart.customerId,
+          paymentMethod: q.cart.paymentMethod,
+          totalPaise: value.totalPaise,
+          actorId: userId,
+        })
+        .returning(),
     );
     for (const i of value.items) {
-      const line = await one<{ id: string }>(
-        tx,
-        'INSERT INTO sale_items(store_id,sale_id,product_id,name,variant,base_unit,quantity,price_quantity,price_paise,line_total_paise) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
-        [
-          storeId,
-          sale.id,
-          i.productId,
-          i.name,
-          i.variant,
-          i.baseUnit,
-          i.quantity,
-          i.priceQuantity,
-          i.pricePaise,
-          i.lineTotalPaise,
-        ],
+      const line = await one(
+        tx
+          .insert(saleItems)
+          .values({ storeId, saleId: sale.id, ...i })
+          .returning({ id: saleItems.id }),
       );
-      await tx.query(
-        'UPDATE inventory_balances SET quantity=quantity-$3 WHERE store_id=$1 AND product_id=$2',
-        [storeId, i.productId, i.quantity],
-      );
-      await tx.query(
-        "INSERT INTO stock_movements(store_id,product_id,delta,kind,sale_item_id,actor_id) VALUES($1,$2,$3,'sale',$4,$5)",
-        [storeId, i.productId, -i.quantity, line.id, userId],
-      );
+      await tx
+        .update(inventoryBalances)
+        .set({ quantity: sql`${inventoryBalances.quantity} - ${i.quantity}` })
+        .where(
+          and(eq(inventoryBalances.storeId, storeId), eq(inventoryBalances.productId, i.productId)),
+        );
+      await tx.insert(stockMovements).values({
+        storeId,
+        productId: i.productId,
+        delta: -i.quantity,
+        kind: 'sale',
+        saleItemId: line.id,
+        actorId: userId,
+      });
     }
     if (q.cart.paymentMethod === 'credit')
-      await tx.query(
-        "INSERT INTO khata_entries(store_id,customer_id,kind,amount_paise,sale_id,actor_id) VALUES($1,$2,'sale_debit',$3,$4,$5)",
-        [storeId, q.cart.customerId, value.totalPaise, sale.id, userId],
-      );
+      await tx.insert(khataEntries).values({
+        storeId,
+        customerId: q.cart.customerId!,
+        kind: 'sale_debit',
+        amountPaise: value.totalPaise,
+        saleId: sale.id,
+        actorId: userId,
+      });
     return { ...sale, items: value.items, lowStock: value.lowStock };
   });
 }
+// PostgreSQL performs the aggregate exactly; the API boundary rejects unsafe numeric results.
+export const balanceExpression = () =>
+  sql<number>`coalesce(sum(case when ${khataEntries.kind} = 'sale_debit' then ${khataEntries.amountPaise} else -${khataEntries.amountPaise} end), 0)::bigint`.mapWith(
+    Number,
+  );
 export async function customerBalance(
   db: Connection,
   storeId: string,
   customerId: string,
 ): Promise<number> {
-  const r = await one<{ balancePaise: number }>(
-    db,
-    "SELECT COALESCE(SUM(CASE WHEN kind='sale_debit' THEN amount_paise ELSE -amount_paise END),0)::bigint AS balance_paise FROM khata_entries WHERE store_id=$1 AND customer_id=$2",
-    [storeId, customerId],
+  const r = await one(
+    db
+      .select({ balancePaise: balanceExpression() })
+      .from(khataEntries)
+      .where(and(eq(khataEntries.storeId, storeId), eq(khataEntries.customerId, customerId))),
   );
   return r.balancePaise;
 }
 export async function saleDetail(db: Connection, storeId: string, saleId: string): Promise<Sale> {
-  const sale = await one<Sale>(db, 'SELECT * FROM sales WHERE store_id=$1 AND id=$2', [
-    storeId,
-    saleId,
-  ]);
-  const items = await rows<SaleLine>(
-    db,
-    'SELECT product_id,name,variant,base_unit,quantity,price_quantity,price_paise,line_total_paise FROM sale_items WHERE store_id=$1 AND sale_id=$2 ORDER BY id',
-    [storeId, saleId],
+  const sale = await one(
+    db
+      .select()
+      .from(sales)
+      .where(and(eq(sales.storeId, storeId), eq(sales.id, saleId))),
+  );
+  const { id: _id, storeId: _storeId, saleId: _saleId, ...fields } = getTableColumns(saleItems);
+  const items = await rows(
+    db
+      .select(fields)
+      .from(saleItems)
+      .where(and(eq(saleItems.storeId, storeId), eq(saleItems.saleId, saleId)))
+      .orderBy(saleItems.id),
   );
   return { ...sale, items };
 }

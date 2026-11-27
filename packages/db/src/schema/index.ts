@@ -57,7 +57,7 @@ export const memberships = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id),
-    role: text('role').notNull(),
+    role: text('role').$type<'owner' | 'staff'>().notNull(),
   },
   (t) => [
     unique().on(t.storeId, t.userId),
@@ -84,7 +84,7 @@ export const invites = pgTable(
     id: pk(),
     storeId: store(),
     email: text('email').notNull(),
-    role: text('role').notNull().default('staff'),
+    role: text('role').$type<'owner' | 'staff'>().notNull().default('staff'),
     tokenHash: text('token_hash').notNull().unique(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
@@ -113,7 +113,7 @@ export const products = pgTable(
     normalizedName: text('normalized_name').notNull(),
     variant: text('variant').notNull().default(''),
     sku: text('sku'),
-    baseUnit: text('base_unit').notNull(),
+    baseUnit: text('base_unit').$type<'gram' | 'each'>().notNull(),
     priceQuantity: integer('price_quantity').notNull(),
     pricePaise: money('price_paise').notNull(),
     safetyStock: integer('safety_stock').notNull().default(0),
@@ -203,7 +203,7 @@ export const sales = pgTable(
     id: pk(),
     storeId: store(),
     customerId: uuid('customer_id'),
-    paymentMethod: text('payment_method').notNull(),
+    paymentMethod: text('payment_method').$type<'cash' | 'upi' | 'credit'>().notNull(),
     totalPaise: money('total_paise').notNull(),
     actorId: uuid('actor_id')
       .notNull()
@@ -232,7 +232,7 @@ export const saleItems = pgTable(
     productId: uuid('product_id').notNull(),
     name: text('name').notNull(),
     variant: text('variant').notNull(),
-    baseUnit: text('base_unit').notNull(),
+    baseUnit: text('base_unit').$type<'gram' | 'each'>().notNull(),
     quantity: integer('quantity').notNull(),
     priceQuantity: integer('price_quantity').notNull(),
     pricePaise: money('price_paise').notNull(),
@@ -257,7 +257,7 @@ export const khataEntries = pgTable(
     id: pk(),
     storeId: store(),
     customerId: uuid('customer_id').notNull(),
-    kind: text('kind').notNull(),
+    kind: text('kind').$type<'sale_debit' | 'payment'>().notNull(),
     amountPaise: money('amount_paise').notNull(),
     saleId: uuid('sale_id'),
     method: text('method'),
@@ -292,7 +292,7 @@ export const restockRequests = pgTable(
     demandKey: text('demand_key').notNull(),
     supplierId: uuid('supplier_id'),
     requestCount: integer('request_count').notNull().default(1),
-    status: text('status').notNull().default('open'),
+    status: text('status').$type<'open' | 'procured'>().notNull().default('open'),
     createdAt: time(),
     lastRequestedAt: timestamp('last_requested_at', { withTimezone: true }).notNull().defaultNow(),
     procuredAt: timestamp('procured_at', { withTimezone: true }),

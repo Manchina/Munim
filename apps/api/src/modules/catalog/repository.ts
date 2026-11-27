@@ -1,28 +1,125 @@
 import { normalize, type Product, type Settings, type Customer, type Page } from '@munim/contracts';
-import type { Connection } from '@munim/db';
-import { one, fail } from '../../lib/core';
-export const productSelect = `SELECT p.*, b.quantity, COALESCE((SELECT array_agg(a.alias ORDER BY a.alias) FROM product_aliases a WHERE a.store_id=p.store_id AND a.product_id=p.id),'{}') AS aliases FROM products p JOIN inventory_balances b ON b.store_id=p.store_id AND b.product_id=p.id`;
-export const customerSelect = `SELECT c.*, COALESCE((SELECT array_agg(a.alias ORDER BY a.alias) FROM customer_aliases a WHERE a.store_id=c.store_id AND a.customer_id=c.id),'{}') AS aliases FROM customers c`;
-export const settings = (db: Connection, storeId: string, lock = false) =>
-  one<Settings>(db, `SELECT * FROM stores WHERE id=$1${lock ? ' FOR SHARE' : ''}`, [storeId]);
-export const product = (db: Connection, storeId: string, id: string, lock = false) =>
-  one<Product>(
-    db,
-    `${productSelect} WHERE p.store_id=$1 AND p.id=$2 AND p.archived_at IS NULL${lock ? ' FOR UPDATE OF p,b' : ''}`,
-    [storeId, id],
+import { schema, type Connection } from '@munim/db';
+import { and, eq, getTableColumns, inArray, isNull, type SQL } from 'drizzle-orm';
+import { one, rows, fail } from '../../lib/core';
+
+const {
+  products,
+  inventoryBalances,
+  productAliases,
+  customers,
+  customerAliases,
+  stores,
+  suppliers,
+  stockMovements,
+} = schema;
+export function productSelect(db: Connection) {
+  return db
+    .select({ ...getTableColumns(products), quantity: inventoryBalances.quantity })
+    .from(products)
+    .innerJoin(
+      inventoryBalances,
+      and(
+        eq(inventoryBalances.storeId, products.storeId),
+        eq(inventoryBalances.productId, products.id),
+      ),
+    );
+}
+export async function productsWithAliases(
+  db: Connection,
+  query: PromiseLike<(typeof products.$inferSelect & { quantity: number })[]>,
+): Promise<Product[]> {
+  const items = await rows(query);
+  if (!items.length) return [];
+  const aliases = await db
+    .select()
+    .from(productAliases)
+    .where(
+      and(
+        eq(productAliases.storeId, items[0]!.storeId),
+        inArray(
+          productAliases.productId,
+          items.map((p) => p.id),
+        ),
+      ),
+    )
+    .orderBy(productAliases.alias);
+  return items.map((p) => ({
+    ...p,
+    aliases: aliases.filter((a) => a.productId === p.id).map((a) => a.alias),
+  }));
+}
+export async function customersWithAliases(
+  db: Connection,
+  condition: SQL,
+  limit?: number,
+): Promise<Customer[]> {
+  const query = db.select().from(customers).where(condition).orderBy(customers.id).$dynamic();
+  const items = await rows(limit === undefined ? query : query.limit(limit));
+  if (!items.length) return [];
+  const aliases = await db
+    .select()
+    .from(customerAliases)
+    .where(
+      and(
+        eq(customerAliases.storeId, items[0]!.storeId),
+        inArray(
+          customerAliases.customerId,
+          items.map((c) => c.id),
+        ),
+      ),
+    )
+    .orderBy(customerAliases.alias);
+  return items.map((c) => ({
+    ...c,
+    aliases: aliases.filter((a) => a.customerId === c.id).map((a) => a.alias),
+  }));
+}
+export async function settings(db: Connection, storeId: string, lock = false): Promise<Settings> {
+  const query = db.select().from(stores).where(eq(stores.id, storeId));
+  return one(lock ? query.for('share') : query);
+}
+export async function product(
+  db: Connection,
+  storeId: string,
+  id: string,
+  lock = false,
+): Promise<Product> {
+  const query = productSelect(db).where(
+    and(eq(products.storeId, storeId), eq(products.id, id), isNull(products.archivedAt)),
   );
-export const customer = (db: Connection, storeId: string, id: string, lock = false) =>
-  one<Customer>(
+  const items = await productsWithAliases(
     db,
-    `${customerSelect} WHERE c.store_id=$1 AND c.id=$2 AND c.archived_at IS NULL${lock ? ' FOR UPDATE OF c' : ''}`,
-    [storeId, id],
+    lock ? query.for('update', { of: [products, inventoryBalances] }) : query,
   );
+  return items[0] ?? fail(404, 'NOT_FOUND', 'Resource was not found.');
+}
+export async function customer(
+  db: Connection,
+  storeId: string,
+  id: string,
+  lock = false,
+): Promise<Customer> {
+  const condition = and(
+    eq(customers.storeId, storeId),
+    eq(customers.id, id),
+    isNull(customers.archivedAt),
+  )!;
+  if (lock)
+    await one(db.select({ id: customers.id }).from(customers).where(condition).for('update'));
+  const items = await customersWithAliases(db, condition);
+  return items[0] ?? fail(404, 'NOT_FOUND', 'Resource was not found.');
+}
 export async function requireSupplier(db: Connection, storeId: string, id: string | null) {
   if (id)
-    await one(db, 'SELECT id FROM suppliers WHERE store_id=$1 AND id=$2 AND archived_at IS NULL', [
-      storeId,
-      id,
-    ]);
+    await one(
+      db
+        .select({ id: suppliers.id })
+        .from(suppliers)
+        .where(
+          and(eq(suppliers.storeId, storeId), eq(suppliers.id, id), isNull(suppliers.archivedAt)),
+        ),
+    );
 }
 export async function aliases(
   db: Connection,
@@ -31,16 +128,24 @@ export async function aliases(
   id: string,
   values: string[],
 ) {
-  await db.query(`DELETE FROM ${table}_aliases WHERE store_id=$1 AND ${table}_id=$2`, [
-    storeId,
-    id,
-  ]);
-  for (const alias of new Set(values.map(normalize)))
-    await db.query(`INSERT INTO ${table}_aliases(store_id,${table}_id,alias) VALUES($1,$2,$3)`, [
-      storeId,
-      id,
-      alias,
-    ]);
+  const unique = [...new Set(values.map(normalize))];
+  if (table === 'product') {
+    await db
+      .delete(productAliases)
+      .where(and(eq(productAliases.storeId, storeId), eq(productAliases.productId, id)));
+    if (unique.length)
+      await db
+        .insert(productAliases)
+        .values(unique.map((alias) => ({ storeId, productId: id, alias })));
+  } else {
+    await db
+      .delete(customerAliases)
+      .where(and(eq(customerAliases.storeId, storeId), eq(customerAliases.customerId, id)));
+    if (unique.length)
+      await db
+        .insert(customerAliases)
+        .values(unique.map((alias) => ({ storeId, customerId: id, alias })));
+  }
 }
 export function page<T extends { id: string }>(items: T[], limit: number): Page<T> {
   return {
@@ -62,14 +167,15 @@ export async function moveStock(
   if (p.quantity + delta < 0 || p.quantity + delta > 2_000_000_000)
     fail(422, 'INVALID_STOCK', 'Stock would be outside the supported range.');
   if (delta) {
-    await db.query(
-      'UPDATE inventory_balances SET quantity=quantity+$3 WHERE store_id=$1 AND product_id=$2',
-      [storeId, productId, delta],
-    );
-    await db.query(
-      'INSERT INTO stock_movements(store_id,product_id,delta,kind,reason,actor_id,restock_request_id) VALUES($1,$2,$3,$4,$5,$6,$7)',
-      [storeId, productId, delta, kind, reason, actorId, restockId],
-    );
+    await db
+      .update(inventoryBalances)
+      .set({ quantity: p.quantity + delta })
+      .where(
+        and(eq(inventoryBalances.storeId, storeId), eq(inventoryBalances.productId, productId)),
+      );
+    await db
+      .insert(stockMovements)
+      .values({ storeId, productId, delta, kind, reason, actorId, restockRequestId: restockId });
   }
   return { productId, quantity: p.quantity + delta };
 }

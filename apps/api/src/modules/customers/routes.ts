@@ -1,17 +1,24 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, eq, gt, ilike, isNull } from 'drizzle-orm';
 import { type StoreRoute, param, empty } from '../../lib/router';
-import { personInput, pageInput, normalize, type Customer } from '@munim/contracts';
-import { customer, customerSelect, aliases, page } from '../catalog/repository';
+import { personInput, pageInput, normalize } from '@munim/contracts';
+import { customer, customersWithAliases, aliases, page } from '../catalog/repository';
 import { customerBalance } from '../sales/service';
-import { one, rows, fail } from '../../lib/core';
+import { one, fail } from '../../lib/core';
+const { customers } = schema;
 export function registerCustomersRoutes(route: StoreRoute, db: Database) {
   route('GET', '/customers', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
     return page(
-      await rows<Customer>(
+      await customersWithAliases(
         db,
-        `${customerSelect} WHERE c.store_id=$1 AND c.archived_at IS NULL AND ($2::uuid IS NULL OR c.id>$2) AND lower(c.name) LIKE '%'||$3||'%' ORDER BY c.id LIMIT $4`,
-        [c.storeId, p.cursor ?? null, normalize(p.q), p.limit + 1],
+        and(
+          eq(customers.storeId, c.storeId),
+          isNull(customers.archivedAt),
+          p.cursor ? gt(customers.id, p.cursor) : undefined,
+          ilike(customers.name, `%${normalize(p.q)}%`),
+        )!,
+        p.limit + 1,
       ),
       p.limit,
     );
@@ -21,10 +28,11 @@ export function registerCustomersRoutes(route: StoreRoute, db: Database) {
   );
   route('POST', '/customers', personInput, async (v, c) =>
     db.transaction(async (tx) => {
-      const p = await one<{ id: string }>(
-        tx,
-        'INSERT INTO customers(store_id,name,phone) VALUES($1,$2,$3) RETURNING id',
-        [c.storeId, v.name, v.phone],
+      const p = await one(
+        tx
+          .insert(customers)
+          .values({ storeId: c.storeId, name: v.name, phone: v.phone })
+          .returning({ id: customers.id }),
       );
       await aliases(tx, 'customer', c.storeId, p.id, v.aliases);
       return customer(tx, c.storeId, p.id);
@@ -36,10 +44,10 @@ export function registerCustomersRoutes(route: StoreRoute, db: Database) {
       await customer(tx, c.storeId, customerId, true);
       if (v.archived && (await customerBalance(tx, c.storeId, customerId)) !== 0)
         fail(422, 'PENDING_BALANCE', 'Settle this balance before archiving.');
-      await tx.query(
-        'UPDATE customers SET name=$3,phone=$4,archived_at=$5 WHERE store_id=$1 AND id=$2',
-        [c.storeId, customerId, v.name, v.phone, v.archived ? new Date() : null],
-      );
+      await tx
+        .update(customers)
+        .set({ name: v.name, phone: v.phone, archivedAt: v.archived ? new Date() : null })
+        .where(and(eq(customers.storeId, c.storeId), eq(customers.id, customerId)));
       await aliases(tx, 'customer', c.storeId, customerId, v.aliases);
       return { id: customerId };
     }),

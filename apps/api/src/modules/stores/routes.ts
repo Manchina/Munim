@@ -1,8 +1,10 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, eq, sql } from 'drizzle-orm';
 import { type StoreRoute, empty } from '../../lib/router';
 import { settingsInput, inviteInput } from '@munim/contracts';
 import { settings } from '../catalog/repository';
 import { one, fail, token, hash } from '../../lib/core';
+const { stores, invites } = schema;
 export function registerStoresRoutes(route: StoreRoute, db: Database, origin: string) {
   route('GET', '/settings', empty, async (_, c) => settings(db, c.storeId));
   route(
@@ -11,19 +13,21 @@ export function registerStoresRoutes(route: StoreRoute, db: Database, origin: st
     settingsInput,
     async (v, c) =>
       one(
-        db,
-        'UPDATE stores SET name=$2,credit_confirmation_threshold_paise=$3,pav_grams=$4,upi_payee=$5,upi_name=$6,settings_version=settings_version+1 WHERE id=$1 AND settings_version=$7 RETURNING *',
-        [
-          c.storeId,
-          v.name,
-          v.creditConfirmationThresholdPaise,
-          v.pavGrams,
-          v.upiPayee,
-          v.upiName,
-          v.expectedVersion,
-        ],
-      ).catch((e) => {
-        if (e.status === 404) fail(409, 'STALE_VERSION', 'Settings changed; reload before saving.');
+        db
+          .update(stores)
+          .set({
+            name: v.name,
+            creditConfirmationThresholdPaise: v.creditConfirmationThresholdPaise,
+            pavGrams: v.pavGrams,
+            upiPayee: v.upiPayee,
+            upiName: v.upiName,
+            settingsVersion: sql`${stores.settingsVersion} + 1`,
+          })
+          .where(and(eq(stores.id, c.storeId), eq(stores.settingsVersion, v.expectedVersion)))
+          .returning(),
+      ).catch((e: unknown) => {
+        if (e instanceof Error && 'status' in e && e.status === 404)
+          fail(409, 'STALE_VERSION', 'Settings changed; reload before saving.');
         throw e;
       }),
     true,
@@ -34,10 +38,17 @@ export function registerStoresRoutes(route: StoreRoute, db: Database, origin: st
     inviteInput,
     async (v, c) => {
       const raw = token();
-      const invite = await one<{ id: string }>(
-        db,
-        "INSERT INTO account_invites(store_id,email,role,token_hash,expires_at) VALUES($1,$2,'staff',$3,now()+interval '2 days') RETURNING id",
-        [c.storeId, v.email, hash(raw)],
+      const invite = await one(
+        db
+          .insert(invites)
+          .values({
+            storeId: c.storeId,
+            email: v.email,
+            role: 'staff',
+            tokenHash: hash(raw),
+            expiresAt: new Date(Date.now() + 2 * 86400000),
+          })
+          .returning({ id: invites.id }),
       );
       return { id: invite.id, url: `${origin}/invite#${raw}` };
     },

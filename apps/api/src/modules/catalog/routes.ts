@@ -1,23 +1,46 @@
-import type { Database } from '@munim/db';
+import { schema, type Database } from '@munim/db';
+import { and, eq, exists, gt, ilike, isNull, like, or } from 'drizzle-orm';
 import { type StoreRoute, param, empty } from '../../lib/router';
+import { productInput, productUpdate, supplierInput, pageInput, normalize } from '@munim/contracts';
 import {
-  productInput,
-  productUpdate,
-  supplierInput,
-  pageInput,
-  normalize,
-  type Product,
-} from '@munim/contracts';
-import { product, productSelect, requireSupplier, aliases, moveStock, page } from './repository';
-import { one, rows, fail } from '../../lib/core';
+  product,
+  productSelect,
+  productsWithAliases,
+  requireSupplier,
+  aliases,
+  moveStock,
+  page,
+} from './repository';
+import { one, fail } from '../../lib/core';
+const { products, inventoryBalances, productAliases, suppliers } = schema;
 export function registerCatalogRoutes(route: StoreRoute, db: Database) {
   route('GET', '/products', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
+    const pattern = `%${normalize(p.q)}%`;
+    const aliasMatch = db
+      .select({ id: productAliases.id })
+      .from(productAliases)
+      .where(
+        and(
+          eq(productAliases.storeId, products.storeId),
+          eq(productAliases.productId, products.id),
+          like(productAliases.alias, pattern),
+        ),
+      );
     return page(
-      await rows<Product>(
+      await productsWithAliases(
         db,
-        `${productSelect} WHERE p.store_id=$1 AND p.archived_at IS NULL AND ($2::uuid IS NULL OR p.id>$2) AND (p.normalized_name LIKE '%'||$3||'%' OR EXISTS(SELECT 1 FROM product_aliases a WHERE a.store_id=p.store_id AND a.product_id=p.id AND a.alias LIKE '%'||$3||'%')) ORDER BY p.id LIMIT $4`,
-        [c.storeId, p.cursor ?? null, normalize(p.q), p.limit + 1],
+        productSelect(db)
+          .where(
+            and(
+              eq(products.storeId, c.storeId),
+              isNull(products.archivedAt),
+              p.cursor ? gt(products.id, p.cursor) : undefined,
+              or(like(products.normalizedName, pattern), exists(aliasMatch)),
+            ),
+          )
+          .orderBy(products.id)
+          .limit(p.limit + 1),
       ),
       p.limit,
     );
@@ -32,26 +55,26 @@ export function registerCatalogRoutes(route: StoreRoute, db: Database) {
     async (v, c) =>
       db.transaction(async (tx) => {
         await requireSupplier(tx, c.storeId, v.supplierId);
-        const p = await one<{ id: string }>(
-          tx,
-          'INSERT INTO products(store_id,name,normalized_name,variant,sku,base_unit,price_quantity,price_paise,safety_stock,supplier_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
-          [
-            c.storeId,
-            v.name,
-            normalize(v.name),
-            v.variant,
-            v.sku,
-            v.baseUnit,
-            v.priceQuantity,
-            v.pricePaise,
-            v.safetyStock,
-            v.supplierId,
-          ],
+        const p = await one(
+          tx
+            .insert(products)
+            .values({
+              storeId: c.storeId,
+              name: v.name,
+              normalizedName: normalize(v.name),
+              variant: v.variant,
+              sku: v.sku,
+              baseUnit: v.baseUnit,
+              priceQuantity: v.priceQuantity,
+              pricePaise: v.pricePaise,
+              safetyStock: v.safetyStock,
+              supplierId: v.supplierId,
+            })
+            .returning({ id: products.id }),
         );
-        await tx.query(
-          'INSERT INTO inventory_balances(store_id,product_id,quantity) VALUES($1,$2,0)',
-          [c.storeId, p.id],
-        );
+        await tx
+          .insert(inventoryBalances)
+          .values({ storeId: c.storeId, productId: p.id, quantity: 0 });
         await aliases(tx, 'product', c.storeId, p.id, v.aliases);
         await moveStock(tx, c.storeId, c.userId, p.id, v.openingStock, 'opening');
         return product(tx, c.storeId, p.id);
@@ -71,22 +94,21 @@ export function registerCatalogRoutes(route: StoreRoute, db: Database) {
         if (old.baseUnit !== v.baseUnit)
           fail(422, 'UNIT_IMMUTABLE', 'Create a new product to change its base unit.');
         await requireSupplier(tx, c.storeId, v.supplierId);
-        await tx.query(
-          'UPDATE products SET name=$3,normalized_name=$4,variant=$5,sku=$6,price_quantity=$7,price_paise=$8,safety_stock=$9,supplier_id=$10,version=version+1,archived_at=$11 WHERE store_id=$1 AND id=$2',
-          [
-            c.storeId,
-            productId,
-            v.name,
-            normalize(v.name),
-            v.variant,
-            v.sku,
-            v.priceQuantity,
-            v.pricePaise,
-            v.safetyStock,
-            v.supplierId,
-            v.archived ? new Date() : null,
-          ],
-        );
+        await tx
+          .update(products)
+          .set({
+            name: v.name,
+            normalizedName: normalize(v.name),
+            variant: v.variant,
+            sku: v.sku,
+            priceQuantity: v.priceQuantity,
+            pricePaise: v.pricePaise,
+            safetyStock: v.safetyStock,
+            supplierId: v.supplierId,
+            version: old.version + 1,
+            archivedAt: v.archived ? new Date() : null,
+          })
+          .where(and(eq(products.storeId, c.storeId), eq(products.id, productId)));
         await aliases(tx, 'product', c.storeId, productId, v.aliases);
         return { id: productId, version: old.version + 1 };
       }),
@@ -95,23 +117,33 @@ export function registerCatalogRoutes(route: StoreRoute, db: Database) {
   route('GET', '/suppliers', empty, async (_, c, req) => {
     const p = pageInput.parse(req.query);
     return page(
-      await rows<{ id: string; name: string; phone: string | null }>(
-        db,
-        "SELECT id,name,phone FROM suppliers WHERE store_id=$1 AND archived_at IS NULL AND ($2::uuid IS NULL OR id>$2) AND lower(name) LIKE '%'||$3||'%' ORDER BY id LIMIT $4",
-        [c.storeId, p.cursor ?? null, normalize(p.q), p.limit + 1],
-      ),
+      await db
+        .select({ id: suppliers.id, name: suppliers.name, phone: suppliers.phone })
+        .from(suppliers)
+        .where(
+          and(
+            eq(suppliers.storeId, c.storeId),
+            isNull(suppliers.archivedAt),
+            p.cursor ? gt(suppliers.id, p.cursor) : undefined,
+            ilike(suppliers.name, `%${normalize(p.q)}%`),
+          ),
+        )
+        .orderBy(suppliers.id)
+        .limit(p.limit + 1),
       p.limit,
     );
   });
+  const supplierFields = { id: suppliers.id, name: suppliers.name, phone: suppliers.phone };
   route(
     'POST',
     '/suppliers',
     supplierInput,
     async (v, c) =>
       one(
-        db,
-        'INSERT INTO suppliers(store_id,name,phone) VALUES($1,$2,$3) RETURNING id,name,phone',
-        [c.storeId, v.name, v.phone],
+        db
+          .insert(suppliers)
+          .values({ storeId: c.storeId, name: v.name, phone: v.phone })
+          .returning(supplierFields),
       ),
     true,
   );
@@ -121,9 +153,11 @@ export function registerCatalogRoutes(route: StoreRoute, db: Database) {
     supplierInput,
     async (v, c, req) =>
       one(
-        db,
-        'UPDATE suppliers SET name=$3,phone=$4,archived_at=$5 WHERE store_id=$1 AND id=$2 RETURNING id,name,phone',
-        [c.storeId, param(req, 'supplierId'), v.name, v.phone, v.archived ? new Date() : null],
+        db
+          .update(suppliers)
+          .set({ name: v.name, phone: v.phone, archivedAt: v.archived ? new Date() : null })
+          .where(and(eq(suppliers.storeId, c.storeId), eq(suppliers.id, param(req, 'supplierId'))))
+          .returning(supplierFields),
       ),
     true,
   );
