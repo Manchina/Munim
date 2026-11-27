@@ -7,9 +7,7 @@ export async function testDatabase(options: { embedded?: boolean } = {}): Promis
   if (process.env.TEST_DATABASE_URL && !options.embedded)
     return realTestDatabase(process.env.TEST_DATABASE_URL);
   const pg = new PGlite();
-  const directory = fileURLToPath(new URL('../migrations/', import.meta.url));
-  for (const file of (await readdir(directory)).filter((f) => f.endsWith('.sql')).sort())
-    await pg.exec(await readFile(`${directory}/${file}`, 'utf8'));
+  await migrateTestDatabase((sql) => pg.exec(sql));
   const connection: Connection = {
     async query<T extends object>(sql: string, values?: unknown[]) {
       return (await pg.query<T>(sql, values)).rows;
@@ -36,10 +34,8 @@ async function realTestDatabase(url: string): Promise<Database> {
   const scopedUrl = new URL(url);
   scopedUrl.searchParams.set('options', `-csearch_path=${schema}`);
   const db = connect(scopedUrl.toString());
-  const directory = fileURLToPath(new URL('../migrations/', import.meta.url));
   try {
-    for (const file of (await readdir(directory)).filter((f) => f.endsWith('.sql')).sort())
-      await db.query(await readFile(`${directory}/${file}`, 'utf8'));
+    await migrateTestDatabase((sql) => db.query(sql), schema);
   } catch (e) {
     await db.close();
     await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
@@ -54,4 +50,17 @@ async function realTestDatabase(url: string): Promise<Database> {
       await admin.end();
     },
   };
+}
+
+/** Remap generated public references only when preparing an isolated test schema. */
+export async function migrateTestDatabase(
+  execute: (sql: string) => Promise<unknown>,
+  schema = 'public',
+): Promise<void> {
+  if (!/^(public|munim_test_[a-f0-9]{32})$/.test(schema)) throw new Error('Invalid test schema');
+  const directory = fileURLToPath(new URL('../migrations/', import.meta.url));
+  for (const file of (await readdir(directory)).filter((f) => f.endsWith('.sql')).sort()) {
+    const sql = await readFile(`${directory}/${file}`, 'utf8');
+    await execute(sql.replaceAll('"public".', `"${schema}".`));
+  }
 }
