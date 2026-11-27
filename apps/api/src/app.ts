@@ -26,8 +26,22 @@ export async function createApp(db: Database, config: Config) {
   await app.register(cookie);
   await app.register(helmet);
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+  const allowedOrigins = new Set([config.origin]);
+  if (!config.production) {
+    const localOrigin = new URL(config.origin);
+    if (
+      localOrigin.protocol === 'http:' &&
+      ['localhost', '127.0.0.1'].includes(localOrigin.hostname)
+    ) {
+      localOrigin.hostname = localOrigin.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+      allowedOrigins.add(localOrigin.origin);
+    }
+  }
   app.addHook('onRequest', async (req) => {
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin !== config.origin)
+    if (
+      !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
+      !allowedOrigins.has(req.headers.origin ?? '')
+    )
       fail(403, 'ORIGIN_REJECTED', 'Request origin was not accepted.');
   });
   app.addHook('onSend', async (_, reply, payload) => {
