@@ -116,12 +116,17 @@ export function useVoice(
         const result = event.results[i]!;
         const transcript = result[0].transcript;
         if (!result.isFinal) {
-          if (wakePhrase.test(transcript)) partial += transcript;
+          partial += transcript;
           continue;
         }
         if (seen.has(i)) continue;
         seen.add(i);
-        if (!wakePhrase.test(transcript)) continue;
+        if (!wakePhrase.test(transcript)) {
+          if (transcript.trim()) {
+            setInterim(`Heard: "${transcript.trim()}" · Say "Munim, …" to run`);
+          }
+          continue;
+        }
         const command = transcript.replace(wakePhrase, '').trim();
         if (!command) continue;
         session.processing = true;
@@ -146,7 +151,7 @@ export function useVoice(
       if (error === 'no-speech') return; // The browser follows this with its end event.
       if (error === 'network' || error === 'service-not-allowed')
         return microphoneError(
-          'Browser speech is unavailable. Try Record command or use the command box.',
+          'Browser speech is unavailable. Tap the mic again to record, or use Wispr Flow / type.',
         );
       microphoneError(`Microphone: ${error}. You can type a command or restart voice.`);
     };
