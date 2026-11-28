@@ -678,13 +678,17 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
       {createPortal(
         <section className="voice-bar" aria-label="Voice and text commands">
           <div className="voice-top">
-            <span className={`mic-state ${voice.listening ? 'listening' : ''}`}>
+            <span
+              className={`mic-state ${voice.listening || recording.phase === 'recording' ? 'listening' : ''}`}
+            >
               ●{' '}
-              {voice.listening
+              {voice.listening || recording.phase === 'recording'
                 ? 'Listening…'
-                : voice.active
-                  ? 'Voice session on'
-                  : 'Voice & text order'}
+                : recording.phase === 'transcribing'
+                  ? 'Transcribing…'
+                  : voice.active
+                    ? 'Voice session on'
+                    : 'Voice & text order'}
             </span>
             <small>
               {voice.interim ||
@@ -716,17 +720,28 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             <button
               type="button"
               className="mic icon-btn"
-              aria-label={voice.active ? 'Stop voice session' : 'Start voice session'}
-              title={voice.active ? 'Stop voice session' : 'Speak order'}
+              aria-label={
+                voice.active || recordingActive ? 'Stop voice session' : 'Start voice session'
+              }
+              title={voice.active || recordingActive ? 'Stop voice session' : 'Speak order'}
               disabled={
-                !voice.active && (disabled || offline || !voice.supported || recordingActive)
+                !voice.active &&
+                !recordingActive &&
+                (disabled || offline || (!voice.supported && !recording.supported))
               }
               onClick={() => {
-                if (voice.active) voice.stop();
-                else voice.start();
+                if (voice.active) {
+                  voice.stop();
+                } else if (recordingActive) {
+                  recording.transcribeRecording();
+                } else if (voice.supported) {
+                  voice.start();
+                } else if (recording.supported) {
+                  void recording.start();
+                }
               }}
             >
-              {voice.active ? (
+              {voice.active || recordingActive ? (
                 <svg
                   width="18"
                   height="18"
@@ -758,45 +773,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               Use command →
             </button>
           </form>
-          {recording.supported && (
-            <div className="voice-recording">
-              {recordingActive ? (
-                <>
-                  <button
-                    type="button"
-                    className="mic"
-                    disabled={
-                      recording.phase === 'requesting' || recording.phase === 'transcribing'
-                    }
-                    onClick={recording.transcribeRecording}
-                  >
-                    {recording.phase === 'requesting'
-                      ? 'Opening microphone…'
-                      : recording.phase === 'transcribing'
-                        ? 'Transcribing…'
-                        : 'Transcribe recording'}
-                  </button>
-                  <button type="button" className="mic" onClick={recording.discard}>
-                    Discard
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="mic"
-                  disabled={disabled || offline || voice.active}
-                  onClick={() => {
-                    voice.stop();
-                    void recording.start();
-                  }}
-                >
-                  Record command
-                </button>
-              )}
-              {recording.phase === 'recording' && <small>Recording…</small>}
-            </div>
-          )}
-          {!voice.supported && (
+          {!voice.supported && !recording.supported && (
             <small>
               Voice mic is not supported in this browser. Type your order or tap an example above.
             </small>
