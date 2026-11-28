@@ -55,7 +55,9 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
           setReady(true);
         }
       })
-      .catch(() => notify('Could not save your cart on this device. Check browser storage settings.'));
+      .catch(() =>
+        notify('Could not save your cart on this device. Check browser storage settings.'),
+      );
     return () => {
       active = false;
     };
@@ -71,7 +73,8 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     if (!voice.active) spokenApproval.current = null;
   }, [voice.active]);
   async function update(next: Draft, remember = true) {
-    if (draft.attempt) throw new Error('Finish or retry the pending bill before changing this cart.');
+    if (draft.attempt)
+      throw new Error('Finish or retry the pending bill before changing this cart.');
     spokenApproval.current = null;
     if (
       next.items.length > 100 ||
@@ -428,9 +431,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             <div className="cart-total">
               <span>
                 Cart total
-                <small>
-                  {preview ? 'Prices verified' : 'Prices checked before billing'}
-                </small>
+                <small>{preview ? 'Prices verified' : 'Prices checked before billing'}</small>
               </span>
               <strong>
                 {total === null ? 'Review quantities' : inr(preview?.totalPaise ?? total)}
@@ -726,11 +727,27 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               }}
             >
               {voice.active ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
                   <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
                   <line x1="12" y1="19" x2="12" y2="22" />

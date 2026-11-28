@@ -250,7 +250,8 @@ export function Stock(p: ViewProps) {
             }}
           >
             <p>
-              Current stock: <strong>{formatStockQty(action.product.quantity, action.product.baseUnit)}</strong>
+              Current stock:{' '}
+              <strong>{formatStockQty(action.product.quantity, action.product.baseUnit)}</strong>
             </p>
             <label>
               {action.mode === 'add' ? 'Quantity added' : 'Quantity to adjust'}

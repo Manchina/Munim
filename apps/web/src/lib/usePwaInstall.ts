@@ -8,8 +8,8 @@ interface BeforeInstallPromptEvent extends Event {
 /** Track PWA installability so the counter can offer a one-tap Install app button. */
 export function usePwaInstall() {
   const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
-  const [installed, setInstalled] = useState(() =>
-    typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches,
+  const [installed, setInstalled] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches,
   );
 
   useEffect(() => {
@@ -39,4 +39,3 @@ export function usePwaInstall() {
 
   return { canInstall: Boolean(promptEvent) && !installed, install };
 }
-

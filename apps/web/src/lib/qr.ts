@@ -32,8 +32,10 @@ export function buildUpiPaymentUri({
 
 /** Issue a scoped digital receipt link for a completed sale and generate its QR image. */
 export async function requestSaleBillQr(base: string, saleId: string): Promise<BillQrLink> {
-  const link = await api<{ id: string; url: string }>(`${base}/sales/${saleId}/receipt-links`, 'POST');
+  const link = await api<{ id: string; url: string }>(
+    `${base}/sales/${saleId}/receipt-links`,
+    'POST',
+  );
   const qrDataUrl = await createBillQrDataUrl(link.url);
   return { ...link, qrDataUrl };
 }
-

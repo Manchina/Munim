@@ -410,8 +410,7 @@ export function Maintenance(p: ViewProps) {
               value={
                 selectedProduct
                   ? decimalAmount(
-                      selectedProduct.baseUnit === 'gram' &&
-                        selectedProduct.priceQuantity !== 1000
+                      selectedProduct.baseUnit === 'gram' && selectedProduct.priceQuantity !== 1000
                         ? Math.round(
                             (selectedProduct.pricePaise * 1000) / selectedProduct.priceQuantity,
                           )

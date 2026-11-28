@@ -34,12 +34,7 @@ export function Modal({
       >
         <div className="modal-head">
           <h2>{title}</h2>
-          <button
-            type="button"
-            className="quiet icon-btn"
-            onClick={onClose}
-            aria-label="Close"
-          >
+          <button type="button" className="quiet icon-btn" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
@@ -49,4 +44,3 @@ export function Modal({
     document.body,
   );
 }
-
