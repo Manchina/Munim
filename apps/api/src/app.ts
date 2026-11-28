@@ -8,11 +8,13 @@ import { DrizzleQueryError } from 'drizzle-orm';
 import { AppError, fail } from './lib/core';
 import { registerAuth } from './modules/auth/routes';
 import { registerStoreRoutes } from './modules/routes';
+import type { OpenAIConfig } from './modules/commands/routes';
 export type Config = {
   origin: string;
   quoteSecret: string;
   production?: boolean;
   logger?: boolean;
+  openAI?: OpenAIConfig;
 };
 export async function createApp(db: Database, config: Config) {
   if (config.quoteSecret.length < 32)
@@ -102,6 +104,6 @@ export async function createApp(db: Database, config: Config) {
     await db.select({ id: schema.users.id }).from(schema.users).limit(1);
     return { ok: true };
   });
-  registerStoreRoutes(app, db, config.quoteSecret, config.origin);
+  registerStoreRoutes(app, db, config.quoteSecret, config.origin, config.openAI);
   return app;
 }

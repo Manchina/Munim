@@ -14,12 +14,14 @@ export type StoreRoute = <S extends z.ZodTypeAny>(
   schema: S,
   fn: (input: z.output<S>, ctx: Context, req: FastifyRequest) => Promise<unknown>,
   owner?: boolean,
+  bodyLimit?: number,
 ) => void;
 export function createStoreRouter(app: FastifyInstance, db: Database): StoreRoute {
-  return (method, routePath, schema, fn, owner = false) => {
+  return (method, routePath, schema, fn, owner = false, bodyLimit) => {
     app.route({
       method,
       url: '/api/v1/stores/:storeId' + routePath,
+      bodyLimit,
       handler: async (req) => {
         param(req, 'storeId');
         const ctx = await authorize(req, db, owner);

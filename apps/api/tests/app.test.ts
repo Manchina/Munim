@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect } from 'vitest';
+import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
 import argon2 from 'argon2';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import type { Database } from '@munim/db';
@@ -8,7 +8,15 @@ import { testDatabase } from '../../../packages/db/src/testing';
 import { seedDemo } from '../../../packages/db/src/seed';
 import { createApp } from '../src/app';
 import { one } from '../src/lib/core';
-import type { Preview, Sale, Product, Customer, Page, LedgerEntry } from '@munim/contracts';
+import {
+  commandAudioLimit,
+  type Preview,
+  type Sale,
+  type Product,
+  type Customer,
+  type Page,
+  type LedgerEntry,
+} from '@munim/contracts';
 let db: Database,
   app: FastifyInstance,
   fixture: Awaited<ReturnType<typeof seedDemo>>,
@@ -84,6 +92,104 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
   await db?.close();
+});
+describe('OpenAI command interpretation', () => {
+  it('limits and transcribes explicitly submitted audio for an authorized store', async () => {
+    const provider = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ text: '  aadha kilo rice  ' }));
+    const agent = await createApp(db, {
+      origin,
+      quoteSecret: 'test-secret-with-at-least-32-characters',
+      openAI: { apiKey: 'mock-key', fetch: provider },
+    });
+    const clip = Buffer.from([1, 2, 3]);
+    const upload = (body = clip, session = cookie) =>
+      agent.inject({
+        method: 'POST',
+        url: `/api/v1${path('/commands/transcribe')}`,
+        headers: { origin, cookie: session, 'content-type': 'audio/webm;codecs=opus' },
+        payload: body,
+      });
+    try {
+      expect((await upload(clip, '')).statusCode).toBe(401);
+      expect((await upload(Buffer.alloc(commandAudioLimit + 1))).statusCode).toBe(413);
+      expect(provider).not.toHaveBeenCalled();
+      const response = await upload();
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ transcript: 'aadha kilo rice' });
+      const [url, init] = provider.mock.calls[0]!;
+      expect(url).toBe('https://api.openai.com/v1/audio/transcriptions');
+      const form = init?.body as FormData;
+      expect(form.get('model')).toBe('gpt-transcribe');
+      expect(await (form.get('file') as Blob).arrayBuffer()).toEqual(new Uint8Array(clip).buffer);
+    } finally {
+      await agent.close();
+    }
+  });
+  const payload = { transcript: 'aadha kilo rice aur do Lifebuoy sabun' };
+  const route = '/commands/interpret';
+  const output = (text: string) =>
+    Response.json({
+      status: 'completed',
+      output: [{ type: 'message', content: [{ type: 'output_text', text }] }],
+    });
+
+  it('lets the counter fall back when no key is configured', async () => {
+    const response = await request('POST', path(route), payload);
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('AGENT_UNAVAILABLE');
+  });
+
+  it('checks store access, normalizes commands and handles invalid outputs and outages', async () => {
+    const provider = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(output('{"command":"0.5 kg rice, 2 Lifebuoy sabun"}'))
+      .mockResolvedValueOnce(output('{"command":null}'))
+      .mockResolvedValueOnce(output('{"command":123}'))
+      .mockRejectedValueOnce(new DOMException('Timed out', 'TimeoutError'))
+      .mockImplementation(async () => output('{"command":"checkout"}'));
+    const agent = await createApp(db, {
+      origin,
+      quoteSecret: 'test-secret-with-at-least-32-characters',
+      openAI: { apiKey: 'mock-key', fetch: provider },
+    });
+    const send = (headers = { origin, cookie }, body: unknown = payload, endpoint = path(route)) =>
+      agent.inject({ method: 'POST', url: `/api/v1${endpoint}`, headers, payload: body as object });
+    try {
+      expect((await send({ origin, cookie: '' })).statusCode).toBe(401);
+      expect((await send({ origin: 'https://example.org', cookie })).statusCode).toBe(403);
+      expect(
+        (await send({ origin, cookie }, payload, `/stores/${crypto.randomUUID()}${route}`))
+          .statusCode,
+      ).toBe(404);
+      expect((await send({ origin, cookie }, { transcript: ' ' })).statusCode).toBe(400);
+      expect(provider).not.toHaveBeenCalled();
+
+      const normalized = await send();
+      expect(normalized.statusCode).toBe(200);
+      expect(normalized.json()).toEqual({
+        type: 'normalized',
+        command: '0.5 kg rice, 2 Lifebuoy sabun',
+      });
+      const [url, init] = provider.mock.calls[0]!;
+      expect(url).toBe('https://api.openai.com/v1/responses');
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        store: false,
+        model: 'gpt-5-mini',
+        input: payload.transcript,
+        text: { format: { type: 'json_schema', strict: true } },
+      });
+      expect((await send()).json().type).toBe('clarify');
+      expect((await send()).statusCode).toBe(503);
+      expect((await send()).statusCode).toBe(503);
+      for (let i = 4; i < 30; i++) expect((await send()).statusCode).toBe(200);
+      expect((await send()).statusCode).toBe(429);
+      expect(provider).toHaveBeenCalledTimes(30);
+    } finally {
+      await agent.close();
+    }
+  });
 });
 describe('store transactions and access', () => {
   it('requires authentication and the expected origin', async () => {

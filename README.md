@@ -8,7 +8,7 @@ At a busy counter, a barcode scanner is little help with loose dal, rice, sugar,
 
 ## The counter experience
 
-The high-contrast mobile and tablet interface has three views: **Live Counter**, **Stock & Restock List**, and **Khata Credit Ledger**. A persistent microphone bar offers live Web Speech API capture, an editable transcript that doubles as a text simulator, and clickable sample command chips. Each input uses the same command parser.
+The high-contrast mobile and tablet interface has three views: **Live Counter**, **Stock & Restock List**, and **Khata Credit Ledger**. In Live Counter, start a voice session once and address commands to “Munim.” Browser speech recognition transcribes the command, and the optional OpenAI agent rewrites it for the same parser used by typed commands and sample chips.
 
 | Workflow                   | What the shopkeeper can do                                                                                                                                                                   |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -66,6 +66,18 @@ npm run db:invite -- owner@example.com "My Kirana"
 ```
 
 Share the printed link privately; it expires after two days. Owners invite staff from **Manage Store**. Existing account holders sign in before accepting another store's invitation.
+
+## Run the hands-free demo
+
+Set `OPENAI_API_KEY` in the root `.env` and restart `npm run dev`. `OPENAI_MODEL` defaults to `gpt-5-mini`. On a phone, serve Munim over HTTPS and keep Live Counter open in the foreground. Tap **Start voice session** and grant microphone access.
+
+1. Say “Munim, aadha kilo rice aur do Lifebuoy sabun.” Check the cart and listen to the added quantities.
+2. Say “Munim, Ramesh bhai ke khate mein likh do.” After Munim reads back the total and the customer, say “Munim, confirm credit” within 30 seconds.
+3. Check the completed sale, stock, and Ramesh’s Khata. To record a paid sale, ask for cash or UPI checkout and say “Munim, confirm payment received” after checking that payment has arrived.
+
+To demo Wispr Flow, focus **Command transcript**, dictate with the Wispr app installed on the device, then tap **Use command**. The same box accepts keyboard dictation, typing, and pasted text. Submitted text uses the OpenAI agent when available. OpenAI outages fall back to Munim’s local parser, and offline input can still edit the cart draft. For checkout from the text box, review and confirm on screen.
+
+If the browser’s speech service fails, click **Record command**, speak one command, then click **Transcribe recording** to send the clip to OpenAI. Review the resulting text and click **Use command**. The clip is capped at 12 seconds in the browser and stays on your device until you choose to transcribe it.
 
 ## Checks and production build
 
