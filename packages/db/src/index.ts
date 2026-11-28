@@ -3,6 +3,7 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import { createPool } from './config';
 import * as schema from './schema/index';
 export { createPool, resolveDatabaseUrl } from './config';
+export { hashPassword, verifyPassword } from './password';
 export { schema };
 export type Connection = Pick<
   PgDatabase<PgQueryResultHKT, typeof schema>,

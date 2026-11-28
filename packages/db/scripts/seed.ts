@@ -1,6 +1,5 @@
-import argon2 from 'argon2';
 import { z } from 'zod';
-import { connect } from '../src/index';
+import { connect, hashPassword } from '../src/index';
 import { seedDemo } from '../src/seed';
 const env = z
   .object({
@@ -11,7 +10,7 @@ const env = z
   .parse(process.env);
 const db = connect(env.DATABASE_URL);
 try {
-  const result = await seedDemo(db, env.SEED_EMAIL, await argon2.hash(env.SEED_PASSWORD));
+  const result = await seedDemo(db, env.SEED_EMAIL, await hashPassword(env.SEED_PASSWORD));
   console.log(
     `Created demo store ${result.storeId} for ${env.SEED_EMAIL}. Existing accounts are never reset.`,
   );

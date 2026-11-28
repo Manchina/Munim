@@ -1,5 +1,5 @@
 import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
-import argon2 from 'argon2';
+import { hashPassword } from '@munim/db';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import type { Database } from '@munim/db';
 import { schema } from '@munim/db';
@@ -78,7 +78,7 @@ async function quote(productId: string, qty: number, customerId: string | null =
 }
 beforeAll(async () => {
   db = await testDatabase();
-  fixture = await seedDemo(db, 'owner@test.local', await argon2.hash(password));
+  fixture = await seedDemo(db, 'owner@test.local', await hashPassword(password));
   app = await createApp(db, { origin, quoteSecret: 'test-secret-with-at-least-32-characters' });
   const login = await app.inject({
     method: 'POST',

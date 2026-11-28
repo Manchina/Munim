@@ -1,6 +1,5 @@
-import argon2 from 'argon2';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { schema, type Database } from '@munim/db';
+import { hashPassword, schema, verifyPassword, type Database } from '@munim/db';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { loginInput, acceptInviteInput } from '@munim/contracts';
 import { fail, hash, one, token } from '../../lib/core';
@@ -11,7 +10,7 @@ declare module 'fastify' {
   }
 }
 export async function registerAuth(app: FastifyInstance, db: Database, production: boolean) {
-  const dummyHash = await argon2.hash(token());
+  const dummyHash = await hashPassword(token());
   app.decorateRequest('userId', '');
   app.addHook('preHandler', async (req) => {
     const route = req.routeOptions.url ?? '';
@@ -59,7 +58,7 @@ export async function registerAuth(app: FastifyInstance, db: Database, productio
         .select({ id: users.id, passwordHash: users.passwordHash, active: users.active })
         .from(users)
         .where(eq(users.email, input.email));
-      const valid = await argon2.verify(user?.passwordHash ?? dummyHash, input.password);
+      const valid = await verifyPassword(user?.passwordHash ?? dummyHash, input.password);
       if (!user || !valid || !user.active)
         fail(401, 'LOGIN_FAILED', 'Email or password is incorrect.');
       await setSession(user!.id, reply);
@@ -121,7 +120,7 @@ export async function registerAuth(app: FastifyInstance, db: Database, productio
           user = await one(
             tx
               .insert(users)
-              .values({ email: invite.email, passwordHash: await argon2.hash(input.password!) })
+              .values({ email: invite.email, passwordHash: await hashPassword(input.password!) })
               .returning({ id: users.id, active: users.active }),
           );
         }
