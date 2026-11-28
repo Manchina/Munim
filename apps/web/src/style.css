@@ -90,6 +90,17 @@ select {
   padding: 11px 12px;
   min-height: 44px;
   width: 100%;
+  box-sizing: border-box;
+}
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23183c32' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 15px;
+  cursor: pointer;
 }
 input[type='checkbox'] {
   width: 20px;
@@ -180,6 +191,13 @@ strong {
 }
 .store-controls select {
   width: 210px;
+}
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
 }
 .connection {
   font-size: 12px;
@@ -669,7 +687,15 @@ td {
   letter-spacing: 1px;
 }
 .ledger-list {
-  margin-top: 24px;
+  margin-top: 16px;
+  max-height: 45vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.inner-scroll {
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .ledger-row {
   display: flex;
@@ -818,7 +844,8 @@ div[hidden] {
   .store-controls select {
     width: 150px;
     font-size: 11px;
-    padding: 8px;
+    padding: 8px 30px 8px 10px;
+    background-position: right 8px center;
   }
   .store-controls button {
     font-size: 10px;
@@ -888,7 +915,7 @@ div[hidden] {
   }
   .voice-bar .mic {
     order: 1;
-    flex: 1;
+    flex: 0 0 auto;
   }
   .voice-bar .primary {
     order: 2;
@@ -935,4 +962,168 @@ div[hidden] {
   .cart-total strong {
     font-size: 28px;
   }
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.toolbar input[type='search'] {
+  flex: 1 1 180px;
+}
+.stock-list {
+  display: grid;
+  gap: 6px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.stock-row {
+  border: 1px solid #e4e6dc;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fffef9;
+}
+.stock-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.stock-row-main > div:first-child {
+  flex: 1 1 160px;
+  display: grid;
+  gap: 2px;
+}
+.stock-row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stock-qty {
+  font-weight: 650;
+  font-size: 15px;
+  white-space: nowrap;
+}
+.stock-row-actions {
+  display: flex;
+  gap: 6px;
+}
+.inline-drawer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #dce0d5;
+  flex-wrap: wrap;
+}
+.inline-drawer.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+.inline-drawer input[type='number'] {
+  flex: 1 1 110px;
+}
+.inline-drawer select {
+  width: auto;
+}
+.unit-tag {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4c564f;
+  padding: 0 4px;
+}
+.quick-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.subnav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.single-column {
+  max-width: 760px;
+  margin: 0 auto;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 34, 26, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  z-index: 50;
+}
+.modal-card {
+  width: min(480px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  background: #fffefb;
+  border: 1px solid #dce1d6;
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 20px 50px rgba(18, 34, 26, 0.22);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.modal-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.more-options {
+  border: 1px solid #e4e6dc;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #faf9f3;
+}
+.more-options summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #355245;
+}
+.more-options[open] summary {
+  margin-bottom: 12px;
+}
+.restock-group {
+  margin-bottom: 14px;
+}
+.restock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+.restock-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }

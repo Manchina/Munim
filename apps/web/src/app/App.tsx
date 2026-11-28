@@ -8,6 +8,7 @@ import { Khata } from '../features/khata/Khata';
 import { Maintenance } from '../features/management/Management';
 import { Receipt } from '../features/receipts/Receipt';
 import { durableWrite, pendingKey, type PendingWrite } from '../lib/mutations';
+import { usePwaInstall } from '../lib/usePwaInstall';
 export type Data = {
   products: Product[];
   customers: Customer[];
@@ -56,6 +57,7 @@ export function App() {
     [view, setView] = useState('counter'),
     [busy, setBusy] = useState(false);
   const lock = useRef(false);
+  const pwa = usePwaInstall();
   const receiptToken = location.pathname.match(/^\/receipt\/([A-Za-z0-9_-]{43})$/)?.[1];
   const invitation = location.pathname === '/invite' ? location.hash.slice(1) : '';
   const run = async (fn: () => Promise<void>) => {
@@ -123,7 +125,7 @@ export function App() {
     if (!navigator.onLine) {
       const cached = await get<Data>(cacheKey);
       if (cached && activeScope.current === cacheKey) setData(cached);
-      else setMessage('Connect once to load this store.');
+      else setMessage('Go online once to load your store.');
       return;
     }
     const [products, customers, settings, suppliers, restock, balances] = await Promise.all([
@@ -207,8 +209,34 @@ export function App() {
               </option>
             ))}
           </select>
+          {pwa.canInstall && (
+            <button
+              className="icon-btn"
+              onClick={() => void pwa.install()}
+              title="Install Munim app"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Install app
+            </button>
+          )}
           <button
-            className="quiet"
+            className="quiet icon-btn"
+            aria-label="Sign out"
+            title="Sign out"
             disabled={busy || offline}
             onClick={() =>
               void run(async () => {
@@ -219,7 +247,21 @@ export function App() {
               })
             }
           >
-            Sign out
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
           </button>
         </div>
       </header>
@@ -272,7 +314,7 @@ export function App() {
           </Panel>
         ) : !props ? (
           <Panel title="Loading your store">
-            <p>Connect to load the catalog and ledger.</p>
+            <p>Go online to load your items and khata.</p>
             <button onClick={() => void run(refresh)}>Retry</button>
           </Panel>
         ) : (
@@ -285,7 +327,7 @@ export function App() {
         {props && view === 'manage' && <Maintenance {...props} />}
         <footer>
           Made for the rhythm of your dukaan.
-          <span>₹ INR · {data?.products.length ?? 0} products in your catalog</span>
+          <span>₹ INR · {data?.products.length ?? 0} items in your store</span>
         </footer>
       </main>
     </>
@@ -301,8 +343,7 @@ function PendingUpdate(p: ViewProps) {
   return (
     <div className="notice">
       <p>
-        A store update is pending confirmation. Retry the original request before submitting another
-        stock or ledger update.
+        One update did not finish saving. Tap Retry before making another stock or khata change.
       </p>
       <button
         disabled={p.busy || p.offline}
@@ -315,7 +356,7 @@ function PendingUpdate(p: ViewProps) {
           })
         }
       >
-        Retry store update
+        Retry update
       </button>
     </div>
   );
@@ -346,7 +387,7 @@ function Auth({
       <h1>{invitation ? 'Your counter is waiting.' : 'Welcome back, shopkeeper.'}</h1>
       <p>
         {invitation
-          ? 'Accept this private invitation. Existing account holders must sign in with their invited email first.'
+          ? 'Accept this store invite. If you already have an account, sign in with your invited email first.'
           : 'Sign in to keep sales, stock and udhaar in order.'}
       </p>
       <form

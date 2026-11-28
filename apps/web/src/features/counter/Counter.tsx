@@ -10,7 +10,8 @@ import {
   type Sale,
 } from '@munim/contracts';
 import { parseCommand } from '@munim/command-parser';
-import { ApiError, api, inr, decimalAmount } from '../../lib/api';
+import { ApiError, api, decimalAmount, inr } from '../../lib/api';
+import { buildUpiPaymentUri, requestSaleBillQr, type BillQrLink } from '../../lib/qr';
 import { Panel, type ViewProps } from '../../app/App';
 import { QR } from '../receipts/Receipt';
 import { useVoice } from '../../voice/useVoice';
@@ -32,7 +33,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     [confirmed, setConfirmed] = useState(false),
     [share, setShare] = useState(false),
     [lastSale, setLastSale] = useState<Sale | null>(null),
-    [link, setLink] = useState<{ id: string; url: string } | null>(null);
+    [link, setLink] = useState<BillQrLink | null>(null);
   const history = useRef<Draft[]>([]),
     seenAlerts = useRef(new Set<string>());
   const spokenApproval = useRef<SpokenApproval | null>(null);
@@ -54,7 +55,9 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
           setReady(true);
         }
       })
-      .catch(() => notify('Draft storage is unavailable. Enable local storage before checkout.'));
+      .catch(() =>
+        notify('Could not save your cart on this device. Check browser storage settings.'),
+      );
     return () => {
       active = false;
     };
@@ -70,7 +73,8 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     if (!voice.active) spokenApproval.current = null;
   }, [voice.active]);
   async function update(next: Draft, remember = true) {
-    if (draft.attempt) throw new Error('Resolve the pending checkout before changing this cart.');
+    if (draft.attempt)
+      throw new Error('Finish or retry the pending bill before changing this cart.');
     spokenApproval.current = null;
     if (
       next.items.length > 100 ||
@@ -78,7 +82,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
         (i) => !Number.isSafeInteger(i.quantity) || i.quantity < 1 || i.quantity > 2_000_000_000,
       )
     )
-      throw new Error('Use up to 100 products with valid whole quantities.');
+      throw new Error('Please keep up to 100 items with whole numbers.');
     sumMoney(
       next.items.map((i) => {
         const p = data.products.find((p) => p.id === i.productId);
@@ -95,7 +99,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
   async function review(next: Draft = draft, showQr = false) {
     spokenApproval.current = null;
     if (!next.items.length) throw new Error('Add an item first.');
-    if (offline) throw new Error('Reconnect to validate this cart.');
+    if (offline) throw new Error('Go online to check prices and complete this bill.');
     const { attempt: _, ...cart } = next;
     const value = await api<Preview>(`${base}/sales/preview`, 'POST', cart);
     setPreview(value);
@@ -256,7 +260,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
       }
     }
     if (intent.type === 'restock') {
-      if (offline) throw new Error('Reconnect to record a restock request.');
+      if (offline) throw new Error('Go online to save this restock request.');
       const { type: _, ...body } = intent;
       await durableWrite(`${userId}:${data.settings.id}`, `${base}/restock-requests`, body);
       await feedback('Added to your wholesale list.', session);
@@ -264,7 +268,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     }
   }
   async function commit(spokenQuote?: string, session?: AbortSignal) {
-    if (offline) throw new Error('Reconnect before checkout.');
+    if (offline) throw new Error('Go online to complete this bill.');
     if (!draft.attempt && (!preview || (!confirmed && spokenQuote !== preview.quote)))
       throw new Error('Review and confirm the payment or credit first.');
     spokenApproval.current = null;
@@ -329,7 +333,11 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
   const low = data.products.filter((p) => p.quantity <= p.safetyStock);
   const upi =
     preview && data.settings.upiPayee && draft.paymentMethod === 'upi'
-      ? `upi://pay?${new URLSearchParams({ pa: data.settings.upiPayee, pn: data.settings.upiName ?? data.settings.name, am: decimalAmount(preview.totalPaise), cu: 'INR' })}`
+      ? buildUpiPaymentUri({
+          payee: data.settings.upiPayee,
+          name: data.settings.upiName ?? data.settings.name,
+          amountPaise: preview.totalPaise,
+        })
       : null;
   return (
     <>
@@ -423,9 +431,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             <div className="cart-total">
               <span>
                 Cart total
-                <small>
-                  {preview ? 'Validated by your store' : 'Final prices checked at checkout'}
-                </small>
+                <small>{preview ? 'Prices verified' : 'Prices checked before billing'}</small>
               </span>
               <strong>
                 {total === null ? 'Review quantities' : inr(preview?.totalPaise ?? total)}
@@ -475,7 +481,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             </div>
             {draft.attempt ? (
               <div className="notice">
-                <p>Checkout result is pending. Your cart is locked to prevent a duplicate sale.</p>
+                <p>Waiting for bill confirmation. Cart is locked so it is not billed twice.</p>
                 <button
                   className="primary"
                   disabled={busy || offline}
@@ -548,7 +554,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             </div>
             {share && preview && (
               <div className="qr-panel">
-                <h3>Unpaid cart preview · {inr(preview.totalPaise)}</h3>
+                <h3>Bill preview · {inr(preview.totalPaise)}</h3>
                 {preview.items.map((i) => (
                   <p key={i.productId}>
                     {i.name} · {i.quantity} {i.baseUnit} · {inr(i.lineTotalPaise)}
@@ -557,13 +563,13 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                 {upi ? (
                   <>
                     <QR value={upi} label="Pay this cart with UPI" />
-                    <p>Scan to pay. Confirm receipt of payment before checkout.</p>
+                    <p>Scan to pay. Check that payment arrived before completing the bill.</p>
                   </>
                 ) : (
                   <p>
                     {draft.paymentMethod === 'upi'
-                      ? 'Configure a UPI payee in Manage Store.'
-                      : 'Choose UPI to show a payment QR. Receipt links are available after checkout.'}
+                      ? 'Add your UPI ID in Manage Store first.'
+                      : 'Select UPI to show a payment QR. Digital bills are available after checkout.'}
                   </p>
                 )}
               </div>
@@ -580,7 +586,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                   disabled={busy || offline}
                   onClick={() =>
                     void run(async () => {
-                      setLink(await api(`${base}/sales/${lastSale.id}/receipt-links`, 'POST'));
+                      setLink(await requestSaleBillQr(base, lastSale.id));
                     })
                   }
                 >
@@ -588,11 +594,17 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                 </button>
                 {link && (
                   <div className="qr-panel">
-                    <QR value={link.url} label="Open this sale receipt" />
+                    <img
+                      className="qr"
+                      src={link.qrDataUrl}
+                      alt="Open this sale receipt"
+                      width="280"
+                      height="280"
+                    />
                     <a href={link.url} target="_blank" rel="noreferrer">
                       Open receipt
                     </a>
-                    <p>Expires in 7 days. Contains only this sale.</p>
+                    <p>Valid for 7 days · For this bill only</p>
                     <button
                       disabled={busy || offline}
                       onClick={() =>
@@ -605,7 +617,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                         })
                       }
                     >
-                      Revoke link
+                      Cancel link
                     </button>
                   </div>
                 )}
@@ -657,7 +669,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               <p>
                 {low.length
                   ? low.map((p) => p.name).join(', ')
-                  : 'We’ll flag items as they reach their safety level.'}
+                  : 'Items running low will show up here.'}
               </p>
             </div>
           </div>
@@ -672,7 +684,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                 ? 'Listening…'
                 : voice.active
                   ? 'Voice session on'
-                  : 'Your voice, at the counter'}
+                  : 'Voice & text order'}
             </span>
             <small>
               {voice.interim ||
@@ -682,7 +694,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                     ? 'OpenAI unavailable · Using local commands'
                     : voice.active
                       ? 'Start each command with “Munim”'
-                      : 'Type or dictate here. Submitted commands go to OpenAI.')}
+                      : 'Speak or type in Hinglish or English')}
             </small>
           </div>
           <form
@@ -693,19 +705,6 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               void run(() => command(transcript, { kind: 'transcript' }));
             }}
           >
-            <button
-              type="button"
-              className="mic"
-              disabled={
-                !voice.active && (disabled || offline || !voice.supported || recordingActive)
-              }
-              onClick={() => {
-                if (voice.active) voice.stop();
-                else voice.start();
-              }}
-            >
-              {voice.active ? '■ Stop voice session' : '● Start voice session'}
-            </button>
             <input
               aria-label="Command transcript"
               placeholder="Try: 1 kilo toor dal, 2 Lifebuoy sabun, aur 1 bread packet"
@@ -714,6 +713,47 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               disabled={disabled || recordingActive}
               onChange={(e) => setText(e.target.value)}
             />
+            <button
+              type="button"
+              className="mic icon-btn"
+              aria-label={voice.active ? 'Stop voice session' : 'Start voice session'}
+              title={voice.active ? 'Stop voice session' : 'Speak order'}
+              disabled={
+                !voice.active && (disabled || offline || !voice.supported || recordingActive)
+              }
+              onClick={() => {
+                if (voice.active) voice.stop();
+                else voice.start();
+              }}
+            >
+              {voice.active ? (
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              ) : (
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="22" />
+                </svg>
+              )}
+            </button>
             <button className="primary" disabled={disabled || recordingActive || !text.trim()}>
               Use command →
             </button>
@@ -753,15 +793,12 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                   Record command
                 </button>
               )}
-              <small>
-                {recording.phase === 'recording' ? 'Recording · ' : ''}Transcribe sends this clip to
-                OpenAI.
-              </small>
+              {recording.phase === 'recording' && <small>Recording…</small>}
             </div>
           )}
           {!voice.supported && (
             <small>
-              Browser voice is unavailable. Type, use keyboard dictation, or try a sample.
+              Voice mic is not supported in this browser. Type your order or tap an example above.
             </small>
           )}
         </section>,

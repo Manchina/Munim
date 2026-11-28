@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
-import QRCode from 'qrcode';
 import type { SaleLine } from '@munim/contracts';
 import { api, inr } from '../../lib/api';
+import { createBillQrDataUrl } from '../../lib/qr';
 export function QR({ value, label }: { value: string; label: string }) {
   const [src, setSrc] = useState('');
   useEffect(() => {
     let active = true;
     setSrc('');
-    void QRCode.toDataURL(value, { width: 280, margin: 2, errorCorrectionLevel: 'M' }).then((s) => {
+    void createBillQrDataUrl(value).then((s) => {
       if (active) setSrc(s);
     });
     return () => {
@@ -67,7 +67,7 @@ export function Receipt({ token }: { token: string }) {
           <p>
             {receipt.paymentStatus === 'merchant_confirmed_paid'
               ? 'Payment confirmed by merchant'
-              : 'Credit sale · status recorded at checkout'}
+              : 'Udhaar (credit) bill'}
           </p>
           <small>Thank you for shopping locally.</small>
         </>
