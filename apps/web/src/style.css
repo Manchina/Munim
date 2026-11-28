@@ -455,6 +455,13 @@ nav button span {
 .voice-bar > small {
   margin-top: 10px;
 }
+.voice-recording {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
 .cart-line {
   display: flex;
   align-items: center;

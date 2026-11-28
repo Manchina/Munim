@@ -6,6 +6,8 @@ const env = z
     DATABASE_URL: z.string().url(),
     APP_ORIGIN: z.string().url(),
     QUOTE_SECRET: z.string().min(32),
+    OPENAI_API_KEY: z.string().trim().optional(),
+    OPENAI_MODEL: z.string().trim().optional(),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     HOST: z.string().default('127.0.0.1'),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -17,6 +19,9 @@ const app = await createApp(db, {
   quoteSecret: env.QUOTE_SECRET,
   production: env.NODE_ENV === 'production',
   logger: true,
+  openAI: env.OPENAI_API_KEY
+    ? { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || undefined }
+    : undefined,
 });
 app.addHook('onClose', () => db.close());
 for (const signal of ['SIGINT', 'SIGTERM'])

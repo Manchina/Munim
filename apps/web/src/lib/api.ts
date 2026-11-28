@@ -13,16 +13,19 @@ export async function api<T>(
   method = 'GET',
   body?: unknown,
   key?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
+  const binary = body instanceof Blob;
   const response = await fetch(`/api/v1${path}`, {
     method,
     credentials: 'same-origin',
     cache: 'no-store',
+    signal,
     headers: {
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(body === undefined ? {} : { 'Content-Type': binary ? body.type : 'application/json' }),
       ...(key ? { 'Idempotency-Key': key } : {}),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined || binary ? body : JSON.stringify(body),
   });
   const value = await response.json();
   if (!response.ok)

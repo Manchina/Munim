@@ -1,4 +1,7 @@
 import { z } from 'zod';
+export const commandAudioLimit = 256 * 1024;
+export type CommandInterpretation =
+  { type: 'normalized'; command: string } | { type: 'clarify'; message: string };
 export const id = z.string().uuid();
 export const amount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const quantity = z.number().int().positive().max(2_000_000_000);

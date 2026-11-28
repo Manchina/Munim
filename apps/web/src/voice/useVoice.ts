@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+
 interface RecognitionResult {
   isFinal: boolean;
   0: { transcript: string };
@@ -21,103 +22,241 @@ type SpeechWindow = Window & {
   SpeechRecognition?: new () => Recognition;
   webkitSpeechRecognition?: new () => Recognition;
 };
-export function useVoice(onText: (text: string) => void, onError: (text: string) => void) {
-  const ref = useRef<Recognition | null>(null),
-    callback = useRef(onText),
-    error = useRef(onError);
-  callback.current = onText;
-  error.current = onError;
-  const [listening, setListening] = useState(false),
-    [interim, setInterim] = useState('');
-  const supported = Boolean(
-    (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition,
-  );
-  function stop() {
-    const current = ref.current;
-    ref.current = null;
-    if (current) {
-      current.onresult = null;
-      current.onerror = null;
-      current.onend = null;
-      current.abort();
+type Session = {
+  controller: AbortController;
+  recognizing?: Recognition;
+  restart?: number;
+  processing: boolean;
+};
+const wakePhrase = /^\s*munim\b[\s,.:!?-]*/i;
+const recognitionConstructor = () =>
+  (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition;
+
+export function useVoice(
+  onCommand: (command: string, signal: AbortSignal) => Promise<void>,
+  notify: (message: string) => void,
+) {
+  const current = useRef<Session | undefined>(undefined);
+  const speech = useRef<((completed: boolean) => void) | undefined>(undefined);
+  const commandCallback = useRef(onCommand);
+  const notifyCallback = useRef(notify);
+  commandCallback.current = onCommand;
+  notifyCallback.current = notify;
+  const [active, setActive] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState('');
+
+  function release(session: Session) {
+    window.clearTimeout(session.restart);
+    session.restart = undefined;
+    const recognizing = session.recognizing;
+    if (!recognizing) return;
+    session.recognizing = undefined;
+    recognizing.onresult = null;
+    recognizing.onerror = null;
+    recognizing.onend = null;
+    recognizing.abort();
+  }
+
+  function close() {
+    const session = current.current;
+    current.current = undefined;
+    if (session) {
+      session.controller.abort();
+      release(session);
     }
+    if (speech.current) {
+      speech.current(false);
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function stop() {
+    close();
+    setActive(false);
     setListening(false);
     setInterim('');
   }
-  function start() {
+
+  function microphoneError(message: string) {
     stop();
-    if ('speechSynthesis' in window) speechSynthesis.cancel();
-    const Constructor =
-      (window as SpeechWindow).SpeechRecognition ??
-      (window as SpeechWindow).webkitSpeechRecognition;
-    if (!Constructor) return error.current('Speech is unavailable here. You can type any command.');
-    const r = new Constructor();
-    ref.current = r;
-    r.lang = 'en-IN';
-    r.interimResults = true;
-    r.continuous = true;
+    notifyCallback.current(message);
+  }
+
+  function resume(session: Session) {
+    if (
+      current.current !== session ||
+      session.processing ||
+      session.recognizing ||
+      session.restart !== undefined ||
+      speech.current
+    )
+      return;
+    // Let the previous recognizer and speaker finish releasing their audio streams.
+    session.restart = window.setTimeout(() => {
+      session.restart = undefined;
+      listen(session);
+    }, 250);
+  }
+
+  function listen(session: Session) {
+    if (current.current !== session || session.processing || speech.current) return;
+    const Constructor = recognitionConstructor();
+    if (!Constructor) return microphoneError('Speech is unavailable. You can type a command.');
+    const recognizing = new Constructor();
+    session.recognizing = recognizing;
+    recognizing.lang = 'en-IN';
+    recognizing.interimResults = true;
+    recognizing.continuous = true;
     const seen = new Set<number>();
-    let finalText = '';
-    r.onresult = (e) => {
-      if (ref.current !== r) return;
+    recognizing.onresult = (event) => {
+      if (session.recognizing !== recognizing) return;
       let partial = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const v = e.results[i]!;
-        if (v.isFinal && !seen.has(i)) {
-          seen.add(i);
-          finalText += `${v[0].transcript} `;
-          callback.current(finalText.trim());
-        } else if (!v.isFinal) partial += v[0].transcript;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]!;
+        const transcript = result[0].transcript;
+        if (!result.isFinal) {
+          if (wakePhrase.test(transcript)) partial += transcript;
+          continue;
+        }
+        if (seen.has(i)) continue;
+        seen.add(i);
+        if (!wakePhrase.test(transcript)) continue;
+        const command = transcript.replace(wakePhrase, '').trim();
+        if (!command) continue;
+        session.processing = true;
+        release(session);
+        setListening(false);
+        setInterim('');
+        void commandCallback
+          .current(command, session.controller.signal)
+          .catch(() => {
+            if (current.current === session)
+              notifyCallback.current('Please try that command again.');
+          })
+          .finally(() => {
+            session.processing = false;
+            resume(session);
+          });
+        return;
       }
       setInterim(partial);
     };
-    r.onerror = (e) => {
-      error.current(`Microphone: ${e.error}. Typing remains available.`);
-      stop();
+    recognizing.onerror = ({ error }) => {
+      if (error === 'no-speech') return; // The browser follows this with its end event.
+      if (error === 'network' || error === 'service-not-allowed')
+        return microphoneError(
+          'Browser speech is unavailable. Try Record command or use the command box.',
+        );
+      microphoneError(`Microphone: ${error}. You can type a command or restart voice.`);
     };
-    r.onend = () => {
-      if (ref.current === r) {
-        ref.current = null;
-        setListening(false);
-        setInterim('');
-      }
+    recognizing.onend = () => {
+      if (session.recognizing !== recognizing) return;
+      session.recognizing = undefined;
+      setListening(false);
+      setInterim('');
+      resume(session);
     };
     try {
-      r.start();
+      recognizing.start();
       setListening(true);
     } catch {
-      stop();
-      error.current('Could not start listening. Try again or type.');
+      microphoneError('Could not start listening. Try again or type a command.');
     }
   }
-  useEffect(() => () => ref.current?.abort(), []);
-  function warn(names: string[]) {
-    stop();
-    if (!names.length) return;
-    const message = `Low stock: ${names.join(', ')}`;
-    try {
-      if ('speechSynthesis' in window) {
-        speechSynthesis.cancel();
-        speechSynthesis.speak(new SpeechSynthesisUtterance(message));
+
+  function start() {
+    if (current.current || document.hidden) return;
+    const session = { controller: new AbortController(), processing: false };
+    current.current = session;
+    setActive(true);
+    listen(session);
+  }
+
+  function speak(message: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted || document.hidden || !('speechSynthesis' in window))
+      return Promise.resolve(false);
+    const session = current.current;
+    if (session) {
+      release(session);
+      setListening(false);
+      setInterim('');
+    }
+    return new Promise((resolve) => {
+      const synth = window.speechSynthesis;
+      if (speech.current) {
+        speech.current(false);
+        synth.cancel();
       }
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = 'en-IN';
+      const finish = (completed: boolean) => {
+        window.clearTimeout(timer);
+        utterance.onend = null;
+        utterance.onerror = null;
+        speech.current = undefined;
+        resolve(completed);
+        if (session) resume(session);
+      };
+      const timer = window.setTimeout(() => {
+        finish(false);
+        synth.cancel();
+      }, 12000);
+      speech.current = finish;
+      utterance.onend = () => finish(true);
+      utterance.onerror = () => finish(false);
+      try {
+        synth.speak(utterance);
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  useEffect(() => {
+    function onHidden() {
+      if (document.hidden) stop();
+    }
+    document.addEventListener('visibilitychange', onHidden);
+    window.addEventListener('pagehide', stop);
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden);
+      window.removeEventListener('pagehide', stop);
+      close();
+    };
+  }, []);
+
+  async function warn(names: string[], signal?: AbortSignal) {
+    if (!names.length || signal?.aborted) return;
+    const spoken = speak(`Low stock: ${names.join(', ')}`, signal);
+    try {
       const Audio = window.AudioContext;
       if (Audio) {
         const audio = new Audio();
-        const oscillator = audio.createOscillator(),
-          gain = audio.createGain();
+        const oscillator = audio.createOscillator();
+        const gain = audio.createGain();
         gain.gain.value = 0.08;
         oscillator.frequency.value = 660;
         oscillator.connect(gain);
         gain.connect(audio.destination);
         oscillator.start();
         oscillator.stop(audio.currentTime + 0.2);
-        oscillator.onended = () => {
-          void audio.close();
-        };
+        oscillator.onended = () => void audio.close();
       }
     } catch {
-      error.current(message);
+      // The warning is also spoken and shown in the counter.
     }
+    await spoken;
   }
-  return { supported, listening, interim, start, stop, warn };
+
+  return {
+    supported: Boolean(recognitionConstructor()),
+    active,
+    listening,
+    interim,
+    start,
+    stop,
+    speak,
+    warn,
+  };
 }

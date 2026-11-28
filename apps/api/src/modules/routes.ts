@@ -9,11 +9,13 @@ import { registerSalesRoutes } from './sales/routes';
 import { registerKhataRoutes } from './khata/routes';
 import { registerRestockRoutes } from './restock/routes';
 import { registerReceiptsRoutes } from './receipts/routes';
+import { registerCommandRoutes, type OpenAIConfig } from './commands/routes';
 export function registerStoreRoutes(
   app: FastifyInstance,
   db: Database,
   secret: string,
   origin: string,
+  openAI?: OpenAIConfig,
 ) {
   const route = createStoreRouter(app, db);
   registerStoresRoutes(route, db, origin);
@@ -24,4 +26,5 @@ export function registerStoreRoutes(
   registerKhataRoutes(route, db);
   registerRestockRoutes(route, db);
   registerReceiptsRoutes(route, db, origin, app);
+  registerCommandRoutes(route, app, openAI);
 }

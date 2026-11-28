@@ -1,20 +1,33 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
 import { get, set } from 'idb-keyval';
-import { lineTotal, sumMoney, type CartInput, type Preview, type Sale } from '@munim/contracts';
+import {
+  lineTotal,
+  sumMoney,
+  type CartInput,
+  type CommandInterpretation,
+  type Preview,
+  type Sale,
+} from '@munim/contracts';
 import { parseCommand } from '@munim/command-parser';
 import { ApiError, api, inr, decimalAmount } from '../../lib/api';
 import { Panel, type ViewProps } from '../../app/App';
 import { QR } from '../receipts/Receipt';
 import { useVoice } from '../../voice/useVoice';
+import { useRecordedCommand } from '../../voice/useRecordedCommand';
 import { durableWrite } from '../../lib/mutations';
 type Draft = CartInput & { attempt?: { quote: string; key: string } };
+type SpokenApproval = { quote: string; phrase: string; expiresAt: number; session: AbortSignal };
+type CommandSource = { kind: 'local' | 'transcript' } | { kind: 'voice'; session: AbortSignal };
 const blank: Draft = { items: [], paymentMethod: 'cash', customerId: null };
+const confirmPayment = 'confirm payment received';
+const confirmCredit = 'confirm credit';
 export function Counter({ data, base, userId, offline, busy, run, refresh, notify }: ViewProps) {
   const draftKey = `draft:${userId}:${data.settings.id}`;
   const [draft, setDraft] = useState<Draft>(blank),
     [ready, setReady] = useState(false),
     [text, setText] = useState('');
+  const [agentFallback, setAgentFallback] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null),
     [confirmed, setConfirmed] = useState(false),
     [share, setShare] = useState(false),
@@ -22,7 +35,15 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     [link, setLink] = useState<{ id: string; url: string } | null>(null);
   const history = useRef<Draft[]>([]),
     seenAlerts = useRef(new Set<string>());
-  const voice = useVoice(setText, notify);
+  const spokenApproval = useRef<SpokenApproval | null>(null);
+  const voice = useVoice(spokenCommand, notify);
+  const recording = useRecordedCommand(
+    (clip, signal) =>
+      api<{ transcript: string }>(`${base}/commands/transcribe`, 'POST', clip, undefined, signal),
+    setText,
+    notify,
+  );
+  const recordingActive = recording.phase !== 'idle';
   const disabled = !ready || busy || Boolean(draft.attempt);
   useEffect(() => {
     let active = true;
@@ -42,10 +63,15 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     if (offline) {
       setPreview(null);
       voice.stop();
+      recording.discard();
     }
   }, [offline]);
+  useEffect(() => {
+    if (!voice.active) spokenApproval.current = null;
+  }, [voice.active]);
   async function update(next: Draft, remember = true) {
     if (draft.attempt) throw new Error('Resolve the pending checkout before changing this cart.');
+    spokenApproval.current = null;
     if (
       next.items.length > 100 ||
       next.items.some(
@@ -67,7 +93,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     setShare(false);
   }
   async function review(next: Draft = draft, showQr = false) {
-    voice.stop();
+    spokenApproval.current = null;
     if (!next.items.length) throw new Error('Add an item first.');
     if (offline) throw new Error('Reconnect to validate this cart.');
     const { attempt: _, ...cart } = next;
@@ -75,18 +101,91 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     setPreview(value);
     setConfirmed(false);
     setShare(showQr);
+    return value;
   }
-  async function command(value: string) {
+  async function spokenCommand(value: string, session: AbortSignal) {
+    if (disabled || offline || session.aborted) return;
+    setText(`Munim, ${value}`.slice(0, 1000));
+    const phrase = value
+      .toLowerCase()
+      .replace(/[.!?]+$/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    await run(async () => {
+      try {
+        if (phrase === 'cancel') {
+          spokenApproval.current = null;
+          setPreview(null);
+          setConfirmed(false);
+          setShare(false);
+          await feedback('Checkout cancelled. Your cart is still open.', session);
+        } else if (phrase === confirmPayment || phrase === confirmCredit) {
+          const approval = spokenApproval.current;
+          if (
+            !approval ||
+            approval.session !== session ||
+            approval.phrase !== phrase ||
+            approval.quote !== preview?.quote ||
+            Date.now() >= approval.expiresAt
+          ) {
+            await feedback('Please ask for checkout and confirm after I read it back.', session);
+            return;
+          }
+          spokenApproval.current = null;
+          await commit(approval.quote, session);
+        } else {
+          await command(value, { kind: 'voice', session });
+        }
+      } catch (e) {
+        if (!session.aborted)
+          await feedback(
+            e instanceof Error ? e.message : 'Please try that command again.',
+            session,
+          );
+      }
+    });
+  }
+  async function feedback(message: string, session?: AbortSignal) {
+    if (session?.aborted) return;
+    notify(message);
+    if (session) await voice.speak(message, session);
+  }
+  async function command(value: string, source: CommandSource = { kind: 'local' }) {
     if (disabled) return;
-    voice.stop();
-    const intent = parseCommand(value, {
+    const session = source.kind === 'voice' ? source.session : undefined;
+    let normalized = value;
+    if (source.kind !== 'local' && !offline && value.trim()) {
+      try {
+        const response = await api<CommandInterpretation>(
+          `${base}/commands/interpret`,
+          'POST',
+          { transcript: value },
+          undefined,
+          session,
+        );
+        if (session?.aborted) return;
+        setAgentFallback(false);
+        if (response.type === 'clarify') {
+          await feedback(response.message, session);
+          return;
+        }
+        normalized = response.command;
+      } catch (e) {
+        if (session?.aborted) return;
+        if (!(e instanceof TypeError) && !(e instanceof ApiError && [429, 503].includes(e.status)))
+          throw e;
+        setAgentFallback(true);
+      }
+    }
+    const intent = parseCommand(normalized, {
       products: data.products,
       customers: data.customers,
       pavGrams: data.settings.pavGrams,
     });
     if (intent.type === 'unsupported' || intent.type === 'ambiguous') {
-      notify(
+      await feedback(
         `${intent.message}${intent.type === 'ambiguous' ? ` ${intent.candidates.join(' / ')}` : ''}`,
+        session,
       );
       return;
     }
@@ -98,17 +197,32 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
         ...draft,
         items: [...counts].map(([productId, quantity]) => ({ productId, quantity })),
       });
-      notify('Items added. Check your cart before checkout.');
+      const added = intent.items.map(({ productId, quantity }) => {
+        const product = data.products.find((p) => p.id === productId);
+        return `${quantity}${product?.baseUnit === 'gram' ? ' grams of' : ''} ${product?.name ?? 'item'}`;
+      });
+      await feedback(
+        session ? `Added ${added.join(', ')}.` : 'Items added. Check your cart before checkout.',
+        session,
+      );
     }
-    if (intent.type === 'remove')
+    if (intent.type === 'remove') {
+      if (!draft.items.some((i) => i.productId === intent.productId)) {
+        await feedback('That item is not in the cart.', session);
+        return;
+      }
       await update({
         ...draft,
         items: draft.items.filter((i) => i.productId !== intent.productId),
       });
+      if (session) await feedback('Item removed.', session);
+    }
     if (intent.type === 'undo') {
       const previous = history.current.pop();
-      if (previous) await update(previous, false);
-      else notify('There is nothing to undo.');
+      if (previous) {
+        await update(previous, false);
+        if (session) await feedback('Last change undone.', session);
+      } else await feedback('There is nothing to undo.', session);
     }
     if (intent.type === 'checkout' || intent.type === 'credit') {
       const next: Draft = {
@@ -117,21 +231,43 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
         customerId: intent.type === 'credit' ? intent.customerId : null,
       };
       await update(next);
-      await review(next);
+      if (session?.aborted) return;
+      const reviewed = await review(next);
+      if (session && !session.aborted) {
+        const total = `${decimalAmount(reviewed.totalPaise)} rupees`;
+        const name = data.customers.find((customer) => customer.id === next.customerId)?.name;
+        const phrase = next.paymentMethod === 'credit' ? confirmCredit : confirmPayment;
+        const summary =
+          next.paymentMethod === 'credit'
+            ? `${total} on credit for ${name}.`
+            : `${total} by ${next.paymentMethod === 'upi' ? 'U P I' : 'cash'}.`;
+        const readback = `${summary} Say Munim, ${phrase}, or Munim, cancel.`;
+        notify(readback);
+        if ((await voice.speak(readback, session)) && !session.aborted) {
+          spokenApproval.current = {
+            quote: reviewed.quote,
+            phrase,
+            expiresAt: Math.min(Date.now() + 30000, reviewed.expiresAt),
+            session,
+          };
+        } else if (!session.aborted) {
+          notify('Could not read back the total. Review and confirm on screen.');
+        }
+      }
     }
     if (intent.type === 'restock') {
       if (offline) throw new Error('Reconnect to record a restock request.');
       const { type: _, ...body } = intent;
       await durableWrite(`${userId}:${data.settings.id}`, `${base}/restock-requests`, body);
-      notify('Added to your wholesale list.');
+      await feedback('Added to your wholesale list.', session);
       await refresh();
     }
   }
-  async function commit() {
-    voice.stop();
+  async function commit(spokenQuote?: string, session?: AbortSignal) {
     if (offline) throw new Error('Reconnect before checkout.');
-    if (!draft.attempt && (!preview || !confirmed))
+    if (!draft.attempt && (!preview || (!confirmed && spokenQuote !== preview.quote)))
       throw new Error('Review and confirm the payment or credit first.');
+    spokenApproval.current = null;
     const attempt = draft.attempt ?? { quote: preview!.quote, key: crypto.randomUUID() };
     await set(draftKey, { ...draft, attempt });
     setDraft({ ...draft, attempt });
@@ -172,7 +308,8 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
     );
     if (!seenAlerts.current.has(sale.id)) {
       seenAlerts.current.add(sale.id);
-      voice.warn(sale.lowStock ?? []);
+      if (sale.lowStock?.length) await voice.warn(sale.lowStock, session);
+      else if (session) await voice.speak('Sale recorded.', session);
     }
     await refresh().catch(() =>
       notify('Sale recorded. Refresh the store when the connection returns.'),
@@ -376,7 +513,11 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               <button
                 className="primary full"
                 disabled={disabled || offline || !draft.items.length}
-                onClick={() => void run(() => review())}
+                onClick={() =>
+                  void run(async () => {
+                    await review();
+                  })
+                }
               >
                 Review checkout <span>→</span>
               </button>
@@ -390,7 +531,11 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
               </button>
               <button
                 disabled={disabled || !draft.items.length || offline}
-                onClick={() => void run(() => review(draft, true))}
+                onClick={() =>
+                  void run(async () => {
+                    await review(draft, true);
+                  })
+                }
               >
                 Share QR Bill
               </button>
@@ -522,50 +667,102 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
         <section className="voice-bar" aria-label="Voice and text commands">
           <div className="voice-top">
             <span className={`mic-state ${voice.listening ? 'listening' : ''}`}>
-              ● {voice.listening ? 'Listening…' : 'Your voice, at the counter'}
+              ●{' '}
+              {voice.listening
+                ? 'Listening…'
+                : voice.active
+                  ? 'Voice session on'
+                  : 'Your voice, at the counter'}
             </span>
-            <small>{voice.interim || 'Hinglish & English · Always review before checkout'}</small>
+            <small>
+              {voice.interim ||
+                (offline
+                  ? 'Offline · Draft commands only'
+                  : agentFallback
+                    ? 'OpenAI unavailable · Using local commands'
+                    : voice.active
+                      ? 'Start each command with “Munim”'
+                      : 'Type or dictate here. Submitted commands go to OpenAI.')}
+            </small>
           </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void run(() => command(text));
+              if (recordingActive) return;
+              const transcript = text.replace(/^\s*munim\b[\s,.:!?-]*/i, '').trim();
+              void run(() => command(transcript, { kind: 'transcript' }));
             }}
           >
             <button
               type="button"
               className="mic"
-              disabled={disabled || !voice.supported}
+              disabled={
+                !voice.active && (disabled || offline || !voice.supported || recordingActive)
+              }
               onClick={() => {
-                if (voice.listening) voice.stop();
-                else {
-                  if (!sessionStorage.getItem('speech-consent')) {
-                    notify(
-                      'Your browser may send speech to its speech service. Tap Start listening again to accept for this session.',
-                    );
-                    sessionStorage.setItem('speech-consent', '1');
-                    return;
-                  }
-                  voice.start();
-                }
+                if (voice.active) voice.stop();
+                else voice.start();
               }}
             >
-              {voice.listening ? '■ Stop' : '● Start listening'}
+              {voice.active ? '■ Stop voice session' : '● Start voice session'}
             </button>
             <input
               aria-label="Command transcript"
               placeholder="Try: 1 kilo toor dal, 2 Lifebuoy sabun, aur 1 bread packet"
               value={text}
               maxLength={1000}
-              disabled={disabled}
+              disabled={disabled || recordingActive}
               onChange={(e) => setText(e.target.value)}
             />
-            <button className="primary" disabled={disabled || !text.trim()}>
+            <button className="primary" disabled={disabled || recordingActive || !text.trim()}>
               Use command →
             </button>
           </form>
+          {recording.supported && (
+            <div className="voice-recording">
+              {recordingActive ? (
+                <>
+                  <button
+                    type="button"
+                    className="mic"
+                    disabled={
+                      recording.phase === 'requesting' || recording.phase === 'transcribing'
+                    }
+                    onClick={recording.transcribeRecording}
+                  >
+                    {recording.phase === 'requesting'
+                      ? 'Opening microphone…'
+                      : recording.phase === 'transcribing'
+                        ? 'Transcribing…'
+                        : 'Transcribe recording'}
+                  </button>
+                  <button type="button" className="mic" onClick={recording.discard}>
+                    Discard
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="mic"
+                  disabled={disabled || offline || voice.active}
+                  onClick={() => {
+                    voice.stop();
+                    void recording.start();
+                  }}
+                >
+                  Record command
+                </button>
+              )}
+              <small>
+                {recording.phase === 'recording' ? 'Recording · ' : ''}Transcribe sends this clip to
+                OpenAI.
+              </small>
+            </div>
+          )}
           {!voice.supported && (
-            <small>Speech is unavailable in this browser. Type a command or use the samples.</small>
+            <small>
+              Browser voice is unavailable. Type, use keyboard dictation, or try a sample.
+            </small>
           )}
         </section>,
         document.body,
