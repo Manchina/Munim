@@ -148,10 +148,27 @@ export function App() {
   if (loading)
     return (
       <main className="auth">
+        <svg
+          className="mascot"
+          width="96"
+          height="96"
+          viewBox="0 0 96 96"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          role="img"
+          aria-label="Munim"
+        >
+          <rect x="10" y="14" width="76" height="68" rx="18" fill="#123d32" />
+          <path d="M22 30h52v8H22z" fill="#b46a18" />
+          <circle cx="36" cy="50" r="4.5" fill="#fffef9" />
+          <circle cx="60" cy="50" r="4.5" fill="#fffef9" />
+          <path d="M38 62c3 4 17 4 20 0" stroke="#fffef9" strokeWidth="3.5" strokeLinecap="round" />
+          <circle cx="72" cy="24" r="6" fill="#f6f4ed" />
+          <circle cx="72" cy="24" r="3" fill="#b46a18" />
+        </svg>
         <h1>
           Munim<span>●</span>
         </h1>
-        <p>Opening your counter…</p>
       </main>
     );
   if (!me || invitation)
