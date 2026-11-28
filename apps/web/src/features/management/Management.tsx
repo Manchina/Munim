@@ -343,7 +343,7 @@ export function Maintenance(p: ViewProps) {
               const f = fields(e);
               void run(async () => {
                 const displayUnit = sellBy === 'gram' ? 'kg' : 'pcs';
-                const priceQty = sellBy === 'gram' ? 1000 : 1;
+                const priceQty = Number(str(f, 'priceQuantity'));
                 const body = {
                   name: str(f, 'name'),
                   variant: str(f, 'variant'),
@@ -404,20 +404,19 @@ export function Maintenance(p: ViewProps) {
             </div>
             <Field
               name="price"
-              label={sellBy === 'gram' ? 'Price (₹ per kg)' : 'Price (₹ per packet / piece)'}
+              label="Price (₹)"
               type="number"
               step="0.01"
-              value={
-                selectedProduct
-                  ? decimalAmount(
-                      selectedProduct.baseUnit === 'gram' && selectedProduct.priceQuantity !== 1000
-                        ? Math.round(
-                            (selectedProduct.pricePaise * 1000) / selectedProduct.priceQuantity,
-                          )
-                        : selectedProduct.pricePaise,
-                    )
-                  : undefined
-              }
+              value={selectedProduct ? decimalAmount(selectedProduct.pricePaise) : undefined}
+            />
+            <Field
+              key={selectedProduct?.id ?? sellBy}
+              name="priceQuantity"
+              label={sellBy === 'gram' ? 'Price applies to (grams)' : 'Price applies to (pieces)'}
+              type="number"
+              min="1"
+              step="1"
+              value={selectedProduct?.priceQuantity ?? (sellBy === 'gram' ? 1000 : 1)}
             />
             <Field
               name="safetyStock"

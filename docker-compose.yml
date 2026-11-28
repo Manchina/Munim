@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:16-alpine
+    volumes:
+      - munim-db:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: munim-local-password
@@ -24,7 +26,8 @@ services:
       QUOTE_SECRET: munim-local-docker-quote-secret-32-chars
       HOST: 0.0.0.0
       PORT: 3000
-      NODE_ENV: production
+      NODE_ENV: development
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SEED_EMAIL: owner@example.com
       SEED_PASSWORD: munim-demo-1234
 
@@ -36,3 +39,6 @@ services:
       - api
     ports:
       - '3000:80'
+
+volumes:
+  munim-db:

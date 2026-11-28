@@ -81,6 +81,8 @@ If the browser’s speech service fails, click **Record command**, speak one com
 
 ## Checks and production build
 
+For a disposable local Docker demo, run `docker compose up --build -d`, then seed a fresh database once with `docker compose exec api npx tsx packages/db/scripts/seed.ts`. Open http://localhost:3000 and use the demo credentials from `docker-compose.yml`. The database uses the `munim-db` volume, which persists when containers are recreated. Run the seed only on a new demo database. Set `OPENAI_API_KEY` in your shell or an ignored root `.env` to enable the agent for Docker Compose.
+
 ```powershell
 npm run typecheck
 npm test

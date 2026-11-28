@@ -31,9 +31,10 @@ export function toBaseUnits(amount: number, unit: DisplayUnit): number {
   if (!Number.isFinite(amount) || amount < 0) {
     throw new Error('Enter a valid quantity.');
   }
-  const value = unit === 'kg' ? Math.round(amount * 1000) : Math.round(amount);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error('Enter a valid quantity.');
+  const raw = unit === 'kg' ? amount * 1000 : amount;
+  const value = Math.round(raw);
+  if (!Number.isSafeInteger(value) || Math.abs(raw - value) > 1e-7) {
+    throw new Error('Use whole pieces or whole grams (up to 3 decimal places in kg).');
   }
   return value;
 }
