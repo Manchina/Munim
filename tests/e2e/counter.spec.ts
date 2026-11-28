@@ -125,6 +125,48 @@ test('lost checkout response survives reload and retry records only one sale', a
   ).json();
   expect(products.items.find((p: { name: string }) => p.name === 'Chana dal').quantity).toBe(19000);
 });
+test('editing a product preserves its exact price basis', async ({ page }) => {
+  await login(page);
+  const user = await (await page.request.get('/api/v1/auth/me')).json();
+  const base = `/api/v1/stores/${user.stores[0].storeId}`;
+  for (const item of [
+    { name: 'Review weighted item', baseUnit: 'gram', priceQuantity: 333, pricePaise: 100 },
+    { name: 'Review multi pack', baseUnit: 'each', priceQuantity: 3, pricePaise: 100 },
+  ]) {
+    const result = await page.request.post(base + '/products', {
+      headers: { origin: 'http://localhost:5173' },
+      data: {
+        ...item,
+        variant: '',
+        sku: null,
+        safetyStock: 0,
+        openingStock: 0,
+        supplierId: null,
+        aliases: [],
+      },
+    });
+    expect(result.ok()).toBeTruthy();
+  }
+  await page.reload();
+  await page.getByRole('button', { name: /Manage Store/ }).click();
+  for (const name of ['Review weighted item', 'Review multi pack']) {
+    const row = page.locator('.stock-row').filter({ hasText: name });
+    await row.getByRole('button', { name: 'Edit' }).click();
+    await page.getByLabel('Pack size or type (optional, e.g. 100 g)').fill('updated');
+    const saved = page.waitForResponse(
+      (response) => response.request().method() === 'PATCH' && /\/products\//.test(response.url()),
+    );
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    expect((await saved).ok()).toBeTruthy();
+  }
+  const products = (await (await page.request.get(base + '/products')).json()).items;
+  expect(
+    products.find((item: { name: string }) => item.name === 'Review weighted item'),
+  ).toMatchObject({ priceQuantity: 333, pricePaise: 100, variant: 'updated' });
+  expect(
+    products.find((item: { name: string }) => item.name === 'Review multi pack'),
+  ).toMatchObject({ priceQuantity: 3, pricePaise: 100, variant: 'updated' });
+});
 test('mobile counter fits its viewport and supports manual product entry', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);

@@ -13,7 +13,7 @@ RUN npm run build
 FROM node:22-alpine AS api
 WORKDIR /app
 COPY --from=builder /app ./
-CMD ["sh", "-c", "npm run db:migrate && (npm run db:seed || true) && npm run start --workspace @munim/api"]
+CMD ["sh", "-c", "npx tsx packages/db/scripts/migrate.ts && node apps/api/dist/server.js"]
 
 FROM nginx:alpine AS web
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
