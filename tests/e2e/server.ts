@@ -1,9 +1,9 @@
-import argon2 from 'argon2';
+import { hashPassword } from '../../packages/db/src/password';
 import { testDatabase } from '../../packages/db/src/testing';
 import { seedDemo } from '../../packages/db/src/seed';
 import { createApp } from '../../apps/api/src/app';
 const db = await testDatabase();
-await seedDemo(db, 'browser@test.local', await argon2.hash('Browser-password-123!'));
+await seedDemo(db, 'browser@test.local', await hashPassword('Browser-password-123!'));
 const app = await createApp(db, {
   origin: 'http://localhost:5173',
   quoteSecret: 'browser-test-secret-with-32-characters',

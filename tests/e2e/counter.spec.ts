@@ -238,16 +238,12 @@ test('recording fallback transcribes on request and waits for command submission
     return route.fulfill({ json: { transcript: 'aadha kilo rice' } });
   });
   await login(page);
-  await page.getByRole('button', { name: /Start voice session/ }).click();
+  await page.getByRole('button', { name: 'Start voice session' }).click();
   await expect(page.getByText('Browser speech is unavailable.', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: 'Record command' }).click();
-  await expect(page.getByText('Recording…')).toBeVisible();
+  await page.getByRole('button', { name: 'Start voice session' }).click();
+  await expect(page.getByText('Listening…')).toBeVisible();
   expect(uploads).toBe(0);
-  await page.getByRole('button', { name: 'Discard' }).click();
-  expect(uploads).toBe(0);
-
-  await page.getByRole('button', { name: 'Record command' }).click();
-  await page.getByRole('button', { name: 'Transcribe recording' }).click();
+  await page.getByRole('button', { name: 'Stop voice session' }).click();
   await expect(page.getByLabel('Command transcript')).toHaveValue('aadha kilo rice');
   await expect(page.getByLabel('Quantity for Rice')).toHaveCount(0);
   expect(uploads).toBe(1);

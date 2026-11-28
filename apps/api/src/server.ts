@@ -8,6 +8,8 @@ const env = z
     QUOTE_SECRET: z.string().min(32),
     OPENAI_API_KEY: z.string().trim().optional(),
     OPENAI_MODEL: z.string().trim().optional(),
+    CLOUDFLARE_ACCOUNT_ID: z.string().trim().optional(),
+    CLOUDFLARE_API_TOKEN: z.string().trim().optional(),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
     HOST: z.string().default('127.0.0.1'),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -19,9 +21,17 @@ const app = await createApp(db, {
   quoteSecret: env.QUOTE_SECRET,
   production: env.NODE_ENV === 'production',
   logger: true,
-  openAI: env.OPENAI_API_KEY
-    ? { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || undefined }
-    : undefined,
+  openAI:
+    env.OPENAI_API_KEY || (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN)
+      ? {
+          apiKey: env.OPENAI_API_KEY,
+          model: env.OPENAI_MODEL || undefined,
+          cloudflare:
+            env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN
+              ? { accountId: env.CLOUDFLARE_ACCOUNT_ID, apiToken: env.CLOUDFLARE_API_TOKEN }
+              : undefined,
+        }
+      : undefined,
 });
 app.addHook('onClose', () => db.close());
 for (const signal of ['SIGINT', 'SIGTERM'])
