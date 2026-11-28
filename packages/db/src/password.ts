@@ -47,4 +47,3 @@ export async function verifyPassword(storedHash: string, password: string): Prom
   for (let i = 0; i < actual.length; i++) diff |= actual[i]! ^ expected[i]!;
   return diff === 0;
 }
-

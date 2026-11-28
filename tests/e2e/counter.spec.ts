@@ -239,6 +239,8 @@ test('recording fallback transcribes on request and waits for command submission
   });
   await login(page);
   await page.getByRole('button', { name: 'Start voice session' }).click();
+  await expect(page.getByText('Browser speech is unavailable.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Start voice session' }).click();
   await expect(page.getByText('Listening…')).toBeVisible();
   expect(uploads).toBe(0);
   await page.getByRole('button', { name: 'Stop voice session' }).click();
