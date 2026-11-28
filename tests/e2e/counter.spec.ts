@@ -44,7 +44,7 @@ test('Khata supports partial settlement and retains itemized purchases', async (
   await expect(page.getByRole('heading', { name: 'Pending · ₹40.00' })).toBeVisible();
   await page.getByRole('button', { name: 'Items', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Credit purchase · ₹140.00' })).toBeVisible();
-  await expect(page.getByText(/Rice.*2000 gram/)).toBeVisible();
+  await expect(page.getByText(/Rice.*2 kg/)).toBeVisible();
 });
 test('offline app shell recovers the draft and blocks checkout', async ({ page, context }) => {
   await login(page);
