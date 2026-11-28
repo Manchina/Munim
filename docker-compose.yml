@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: munim-local-password
+      POSTGRES_DB: munim
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d munim']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:munim-local-password@db:5432/munim
+      APP_ORIGIN: http://localhost:3000
+      QUOTE_SECRET: munim-local-docker-quote-secret-32-chars
+      HOST: 0.0.0.0
+      PORT: 3000
+      NODE_ENV: production
+      SEED_EMAIL: owner@example.com
+      SEED_PASSWORD: munim-demo-1234
+
+  web:
+    build:
+      context: .
+      target: web
+    depends_on:
+      - api
+    ports:
+      - '3000:80'

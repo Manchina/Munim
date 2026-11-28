@@ -197,9 +197,7 @@ test('recording fallback transcribes on request and waits for command submission
   });
   await login(page);
   await page.getByRole('button', { name: /Start voice session/ }).click();
-  await expect(
-    page.getByText('Voice mic is not supported in this browser.', { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByText('Browser speech is unavailable.', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Record command' }).click();
   await expect(page.getByText('Recording…')).toBeVisible();
   expect(uploads).toBe(0);
