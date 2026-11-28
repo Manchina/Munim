@@ -4,7 +4,12 @@ import { z } from 'zod';
 import { fail } from '../../lib/core';
 import type { StoreRoute } from '../../lib/router';
 
-export type OpenAIConfig = { apiKey: string; model?: string; fetch?: typeof fetch };
+export type OpenAIConfig = {
+  apiKey?: string;
+  model?: string;
+  whisperUrl?: string;
+  fetch?: typeof fetch;
+};
 const input = z.object({ transcript: z.string().trim().min(1).max(1000) }).strict();
 const audio = z.instanceof(Buffer).refine((value) => value.length > 0);
 const audioExtensions = new Map([
@@ -38,7 +43,10 @@ Supported forms:
 - Restock: "restock Amul butter 500g" only when the request to restock is clear. Preserve the product and package size.
 Translate spoken number words into digits but preserve all amounts, measures, product names, and customer names. Keep pav or ser as spoken; never guess their conversions. Never infer a missing quantity, product, payment method, or customer. Keep product and customer names as spoken, using Latin transliteration when required; do not make up a catalog match. For unrelated talk, explicit approvals such as "confirm credit" or "confirm payment received", multiple distinct actions, or uncertainty, return a null command. Do not add commentary.`;
 
-async function interpret(config: OpenAIConfig, transcript: string): Promise<CommandInterpretation> {
+async function interpret(
+  config: OpenAIConfig & { apiKey: string },
+  transcript: string,
+): Promise<CommandInterpretation> {
   const send = config.fetch ?? fetch;
   const model = config.model ?? 'gpt-5-mini';
   const response = await send('https://api.openai.com/v1/responses', {
@@ -93,16 +101,19 @@ export function registerCommandRoutes(
     timeWindow: '1 minute',
     keyGenerator: (req) => users.get(req)!,
   });
-  async function requireProvider(req: FastifyRequest, userId: string) {
-    if (!config) return fail(503, 'AGENT_UNAVAILABLE', 'OpenAI is not configured.');
+  async function requireRateLimit(req: FastifyRequest, userId: string) {
     users.set(req, userId);
     const quota = await limit(req);
     if (!quota.isAllowed && quota.isExceeded)
       return fail(429, 'AGENT_RATE_LIMITED', 'Too many voice commands. Try again in a minute.');
-    return config;
+  }
+  async function requireOpenAI(req: FastifyRequest, userId: string) {
+    if (!config?.apiKey) return fail(503, 'AGENT_UNAVAILABLE', 'OpenAI is not configured.');
+    await requireRateLimit(req, userId);
+    return { ...config, apiKey: config.apiKey };
   }
   route('POST', '/commands/interpret', input, async ({ transcript }, ctx, req) => {
-    const provider = await requireProvider(req, ctx.userId);
+    const provider = await requireOpenAI(req, ctx.userId);
     try {
       return await interpret(provider, transcript);
     } catch {
@@ -122,21 +133,29 @@ export function registerCommandRoutes(
       const mime = req.headers['content-type']?.split(';')[0]?.toLowerCase().trim();
       const extension = mime && audioExtensions.get(mime);
       if (!extension) return fail(415, 'UNSUPPORTED_AUDIO', 'Use a supported audio format.');
-      const provider = await requireProvider(req, ctx.userId);
+      if (!config?.whisperUrl && !config?.apiKey) {
+        return fail(503, 'AGENT_UNAVAILABLE', 'Speech transcription is not configured.');
+      }
+      await requireRateLimit(req, ctx.userId);
       const form = new FormData();
-      form.set('model', 'gpt-transcribe');
+      if (config.whisperUrl) {
+        form.set('response_format', 'json');
+      } else {
+        form.set('model', 'gpt-transcribe');
+      }
       form.set('file', new Blob([new Uint8Array(body)], { type: mime }), `command.${extension}`);
+      const targetUrl = config.whisperUrl ?? 'https://api.openai.com/v1/audio/transcriptions';
+      const headers: Record<string, string> = config.whisperUrl
+        ? {}
+        : { Authorization: `Bearer ${config.apiKey}` };
       let text: string;
       try {
-        const response = await (provider.fetch ?? fetch)(
-          'https://api.openai.com/v1/audio/transcriptions',
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${provider.apiKey}` },
-            body: form,
-            signal: AbortSignal.timeout(12000),
-          },
-        );
+        const response = await (config.fetch ?? fetch)(targetUrl, {
+          method: 'POST',
+          headers,
+          body: form,
+          signal: AbortSignal.timeout(12000),
+        });
         if (!response.ok) {
           await response.body?.cancel();
           throw new Error('Transcription failed');
