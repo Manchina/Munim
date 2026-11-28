@@ -776,10 +776,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                   Record command
                 </button>
               )}
-              <small>
-                {recording.phase === 'recording' ? 'Recording · ' : ''}Transcribe sends this clip to
-                OpenAI.
-              </small>
+              {recording.phase === 'recording' && <small>Recording…</small>}
             </div>
           )}
           {!voice.supported && (
