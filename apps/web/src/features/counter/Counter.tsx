@@ -37,7 +37,12 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
   const history = useRef<Draft[]>([]),
     seenAlerts = useRef(new Set<string>());
   const spokenApproval = useRef<SpokenApproval | null>(null);
-  const voice = useVoice(spokenCommand, notify);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [speechUnavailable, setSpeechUnavailable] = useState(false);
+  const voice = useVoice(spokenCommand, (msg) => {
+    if (msg.startsWith('Browser speech is unavailable.')) setSpeechUnavailable(true);
+    notify(msg);
+  });
   const recording = useRecordedCommand(
     (clip, signal) =>
       api<{ transcript: string }>(`${base}/commands/transcribe`, 'POST', clip, undefined, signal),
@@ -710,6 +715,7 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
             }}
           >
             <input
+              ref={inputRef}
               aria-label="Command transcript"
               placeholder="Try: 1 kilo toor dal, 2 Lifebuoy sabun, aur 1 bread packet"
               value={text}
@@ -730,11 +736,12 @@ export function Counter({ data, base, userId, offline, busy, run, refresh, notif
                 (disabled || offline || (!voice.supported && !recording.supported))
               }
               onClick={() => {
+                inputRef.current?.focus();
                 if (voice.active) {
                   voice.stop();
                 } else if (recordingActive) {
                   recording.transcribeRecording();
-                } else if (voice.supported) {
+                } else if (voice.supported && !speechUnavailable) {
                   voice.start();
                 } else if (recording.supported) {
                   void recording.start();
