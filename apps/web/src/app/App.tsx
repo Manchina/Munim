@@ -196,6 +196,9 @@ export function App() {
           <small>LESS TYPING. MORE DUKAANDAARI.</small>
         </div>
         <div className="store-controls">
+          <span className={`connection ${offline ? 'offline' : ''}`}>
+            {offline ? 'Offline · draft only' : '● Counter connected'}
+          </span>
           <label className="sr-only" htmlFor="store">
             Store
           </label>

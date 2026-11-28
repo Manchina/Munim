@@ -39,8 +39,9 @@ test('Khata supports partial settlement and retains itemized purchases', async (
   await page.getByRole('button', { name: '03 Khata Ledger' }).click();
   await page.getByRole('button', { name: /Ramesh/ }).click();
   await expect(page.getByRole('heading', { name: 'Pending · ₹140.00' })).toBeVisible();
-  await page.getByLabel('Payment amount (₹)').fill('100');
   await page.getByRole('button', { name: 'Settle payment' }).click();
+  await page.getByLabel('Payment amount (₹)').fill('100');
+  await page.getByRole('button', { name: 'Confirm payment' }).click();
   await expect(page.getByRole('heading', { name: 'Pending · ₹40.00' })).toBeVisible();
   await page.getByRole('button', { name: 'Items', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Credit purchase · ₹140.00' })).toBeVisible();
@@ -196,9 +197,11 @@ test('recording fallback transcribes on request and waits for command submission
   });
   await login(page);
   await page.getByRole('button', { name: /Start voice session/ }).click();
-  await expect(page.getByText('Browser speech is unavailable.', { exact: false })).toBeVisible();
+  await expect(
+    page.getByText('Voice mic is not supported in this browser.', { exact: false }),
+  ).toBeVisible();
   await page.getByRole('button', { name: 'Record command' }).click();
-  await expect(page.getByText('Recording · Transcribe sends this clip to OpenAI.')).toBeVisible();
+  await expect(page.getByText('Recording…')).toBeVisible();
   expect(uploads).toBe(0);
   await page.getByRole('button', { name: 'Discard' }).click();
   expect(uploads).toBe(0);
